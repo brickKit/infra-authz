@@ -14,11 +14,14 @@ help:  ## 列出所有目标
 all: check-version test image migrate-idempotent dag-check contract-check import-scan module-check docs-check  ## 8 个门禁（不含 smoke，它要真起容器）
 
 ##@ 9 个门禁
-check-version:  ## component.yaml 的 version 与 git tag 不许分叉（§9.1 两个真相源）
+check-version:  ## component.yaml 的 version、git tag、deployment.image 三者不许分叉（§9.1 两个真相源）
 	@tag="$$(git describe --tags --exact-match 2>/dev/null || true)"; \
 	 if [ -n "$$tag" ] && [ "$$tag" != "v$(VERSION)" ]; then \
 	   echo "✗ git tag $$tag 与 component.yaml 的 $(VERSION) 不一致"; exit 1; fi; \
-	 echo "✓ version=$(VERSION)"
+	 img_ver="$$(grep -E '^[[:space:]]+image:' component.yaml | head -1 | sed -E 's#.*:([0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$$#\1#')"; \
+	 if [ "$$img_ver" != "$(VERSION)" ]; then \
+	   echo "✗ deployment.image 的 tag ($$img_ver) 与 component.yaml 的 version ($(VERSION)) 不一致——镜像大概率没有跟着这次版本升级重新构建（实测踩坑记录类别 F）"; exit 1; fi; \
+	 echo "✓ version=$(VERSION)（git tag 与 deployment.image 一致）"
 
 test:  ## 需要 TEST_PG_DSN 与 TEST_NATS_URL（可选，缺省走 nats.DefaultURL）
 	go test ./... -race -count=1
