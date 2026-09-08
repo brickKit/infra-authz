@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "infra-authz 事件清单",
+  "note": "Schema 演进铁律：只增不删不改（决策 19）。消费者宽容反序列化。⚠️ 两条都是旁路事件，仅供 infra-audit 落审计——策略下发本身刻意不走事件总线（设计计划 §4）。",
+  "envelope": {
+    "description": "所有事件共用的信封。三个 Header 字段由 be-sdk 自动填/校验（§3.10）",
+    "required": ["subject", "aggregate_id", "version", "trace_id", "causation_id", "hop_count", "occurred_at"],
+    "properties": {
+      "subject":      { "type": "string", "pattern": "^[a-z]+\\.[a-z-]+\\.[a-z-]+\\.v[0-9]+$" },
+      "aggregate_id": { "type": "string" },
+      "version":      { "type": "integer", "description": "消费者只在严格大于本地当前值时更新（决策 43）" },
+      "trace_id":     { "type": "string" },
+      "causation_id": { "type": "string" },
+      "hop_count":    { "type": "integer", "maximum": 5, "description": "> 5 直接丢弃进 DLQ（决策 42）" },
+      "occurred_at":  { "type": "string", "format": "date-time" }
+    }
+  },
+  "events": [
+    {
+      "subject": "infra.authz.role.changed.v1",
+      "grade": "peripheral",
+      "note": "角色定义或其权限集变更时发。⚠️ 不驱动 stale_since——权限内容变更靠 bundle 的 roles 直接刷新（下一次轮询 ~15 秒内所有持有该角色的人自动生效），这条只给 infra-audit 落审计用。",
+      "payload": {
+        "type": "object",
+        "required": ["role_code", "change_type"],
+        "properties": {
+          "role_code":   { "type": "string" },
+          "change_type": { "type": "string", "enum": ["created", "permissions_changed", "deleted"] }
+        }
+      }
+    },
+    {
+      "subject": "infra.authz.user_role.changed.v1",
+      "grade": "peripheral",
+      "note": "给人加/减角色、到期、踢人时发。这条对应的 role_changes 表行才是 stale_since 有界列表的来源（设计计划 §2、§4）——事件本身仍然只供审计，下发继续走 bundle 轮询，不靠这条事件触发任何人的刷新。",
+      "payload": {
+        "type": "object",
+        "required": ["sub", "change_type"],
+        "properties": {
+          "sub":         { "type": "string" },
+          "role_code":   { "type": "string", "description": "granted/revoked/expired 时有值；kicked 可能一次性影响多个角色，留空" },
+          "change_type": { "type": "string", "enum": ["granted", "revoked", "expired", "kicked"] }
+        }
+      }
+    }
+  ]
+}

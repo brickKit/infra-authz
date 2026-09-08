@@ -1,0 +1,82 @@
+apiVersion: brickkit/v1
+kind: Component
+
+metadata:
+  id: infra/authz                    # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
+  name: 权限账房
+  version: 1.0.0                     # 精确版本，不接受 ^ / ~ / latest
+  description: 权限键册、角色模型（纯并集）、GET /authz/bundle 策略下发、登录期 claims 计算——权限体系里唯一持久化状态的组件
+  license: Apache-2.0
+  vendor: brickKit
+
+tags: [infra, authz, rbac]
+
+artifacts:
+  - type: api-contract
+    format: protobuf
+    files:
+      - contracts/infra/authz/v1/authz.proto
+      - contracts/events/authz.events.json
+  - type: api-contract
+    format: openapi
+    files: [contracts/authz.openapi.yaml]
+  - type: metadata                   # ← assembly.yaml 靠这一条随组件分发（§3.5）
+    files: [assembly.yaml]
+
+dependencies:
+  components: []                     # ⚠️ 强依赖为零；mdm/org 是弱依赖但阶段五才存在，
+                                      # 现在不写（决策：没有已写好的仓库就不建依赖边）
+  resources:
+    # ⚠️ engine 逐字参与匹配（设计书 §2.7.3.1）：这里写的词必须与
+    #    brickkit.yaml 的 resources[].engine 完全相同，平台不认别名。
+    - { kind: database, engine: postgresql }
+    - { kind: mq,       engine: nats }        # 发 infra.authz.role.changed.v1 等旁路审计事件
+
+configSchema:
+  type: object
+  properties:
+    pgSchema:                        # ⚠️ 不能叫 databaseSchema，DATABASE_ 是保留前缀
+      type: string
+      default: infra_authz
+    iamJwksUrl:                      # 自己的管理 API 也要验 JWT（决策：自吃自己的 bundle）
+      type: string
+    authzBundleUrl:                  # ⚠️ 指向自己——本组件的管理 API 用同一套
+                                      # besdk.RequirePermission 机制保护，需要轮询
+                                      # 自己的 /authz/bundle（Task 4 设计决策，见 README）
+      type: string
+    otelBaseUrl:                     # ⚠️ 不能叫 otelEndpoint，*_ENDPOINT 是保留后缀
+      type: string
+      default: ""                    # 空 → Blackhole Exporter，零成本（§7.5）
+    permissionCatalog:                # be-ops 产出 9 经这里灌入（§14.1.2）。
+      type: string                   # 逗号分隔条目，条目内 | 分隔 key|title|type|owner_component
+      default: ""                    # 空 = 还没有任何组件声明权限键，属于合法的启动态
+    accessTokenTtlSeconds:            # stale_since 窗口 = 2× 这个值（§14.1.6）。
+      type: integer                  # 与 infra-iam-casdoor 签发 access token 的 TTL 必须一致，
+      default: 600                   # 否则窗口算错——已定值 10 分钟（design 计划 §9 第 3 条）
+    defaultOrgId:                     # 阶段三只有一个默认法人/组织（同 erp-finance 的既有先例）
+      type: string                   # ResolveClaims 对所有用户返回同一个 org_id，阶段五多组织时再变
+      default: "1"
+    bootstrapAdminSub:                # 首个管理员的 sub。非空时 Start() 幂等地把 authz_admin
+      type: string                   # 角色授予这个 sub——解决"第一个管理员怎么来"的鸡生蛋问题
+      default: ""                    # （见 README「自举」一节）。留空表示先不自举任何人
+
+deployment:
+  type: container
+  image: brickenterprise/infra-authz:1.0.0
+  port: 8223                         # 端口册 registry/ports.tsv
+  extraPorts:
+    - { name: grpc, port: 9223 }     # → INFRA_AUTHZ_GRPC_ENDPOINT（值仍以 http:// 开头）
+  labels:                            # 平台只搬运，不解释键值。值必须是字符串
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8223"
+    prometheus.io/path: "/metrics"
+  resources:
+    requests: { cpu: "150m", memory: "192Mi" }
+
+migration:
+  command: ["./migrate", "up"]
+
+healthCheck:
+  type: http
+  path: /healthz                     # ⚠️ 只查本进程存活，严禁查库或查依赖组件（§12.3.6）
+  # startPeriodSeconds 不写：默认就是 60，Go 组件够用（§12.3.5）

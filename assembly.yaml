@@ -1,0 +1,45 @@
+id: infra/authz                      # 必须与 component.yaml 一致，be-ops 校验
+version: 1.0.0
+
+asset:
+  source_type: open_standard
+  assembly_role: default
+  contract_lock: strict
+  customization_guide: |
+    角色模型、bundle 下发格式或 stale_since 窗口算法超出标准版时：
+    1. 主管理员在客户电脑本地复制本目录为定制目录（如 infra-authz-acme），改 git remote。
+    2. 用 AI 在 backend/ 生成定制业务代码。
+    3. 严禁对 contracts/ 做破坏性变更；只允许在末尾追加新字段、使用新 Tag 编号——
+       全部 62 个组件的 be-sdk 都轮询 GET /authz/bundle，这是全系统扇出最广的一份契约。
+    4. 把定制目录声明成 local 安装源并排在标准源前面（§3.4.1 遮蔽机制）。
+    ⚠️ metadata.id 与 version 一个字都不能改——改了所有依赖方的
+       INFRA_AUTHZ_ENDPOINT 会整个消失。
+
+    ⚠️ 设计计划 §14 明确论证过纯并集（无 Deny）与本地 PDP（不做集中式）两条
+    是判过的立场，不是待定分歧——不要在这里加 Deny 语义或改成中心化判定。
+
+domain: infra
+tier: backend
+
+edge_routes:
+  # ⚠️ /authz/bundle 刻意不出现在这里——它只在内网被各组件 be-sdk 轮询，
+  # 不经网关暴露给最终用户（设计计划 §3）。be-ops 产出 1（路由表）要跳过它，
+  # 这里不声明就是最简单的跳过方式。
+  - { path: /api/me/permissions, auth: required }
+  - { path: /api/admin/**, auth: required }
+
+menus:
+  - { key: infra.authz, title: 权限与角色管理, permission: infra.authz.admin }
+
+data:
+  schema: infra_authz                 # registry/schemas.tsv
+  role:   infra_authz_rw              # 只用于 SET LOCAL ROLE，从不登录，因此不进 brickkit.yaml
+
+data_scopes: none                     # 权限数据本身不做行级过滤（设计计划 §2）：
+                                       # 能进管理界面的人（infra.authz.admin）就能看全部，
+                                       # 这是功能权限的事，不是数据权限的事
+
+permissions:
+  - { key: infra.authz.admin, title: 权限与角色管理, type: page }
+
+shell: go-infra                       # 合并部署时进外壳三（§13.2、设计计划身份证）

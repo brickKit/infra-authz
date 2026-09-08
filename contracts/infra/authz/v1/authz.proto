@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package infra.authz.v1;
+
+option go_package = "github.com/brickKit/infra-authz/gen/infra/authz/v1;authzv1";
+
+// AuthzService 是 infra-authz 的 gRPC 面（设计计划 §3）。
+//
+// ⚠️ 这不是判权限用的同步调用——判权限走 GET /authz/bundle 的本地 PDP
+// 轮询（设计书 §14.1.4），组件之间不建这条依赖边。这里只有三个真正需要
+// 同步调用的场景：批量读角色详情（§3.8 强制的 batchGet）、登录/刷新时
+// infra-iam-casdoor 计算 claims、以及给不方便走 HTTP 的调用方备用的
+// gRPC 版 bundle。
+service AuthzService {
+  // BatchGetRoles 是防 N+1 的唯一合法批量读方式（§3.8）。
+  rpc BatchGetRoles(BatchGetRolesRequest) returns (BatchGetRolesResponse);
+
+  // ResolveClaims 给 infra-iam-casdoor：sub -> roles[]/dept_path/org_id。
+  // ⚠️ 登录与刷新时各调一次，绝不缓存结果（设计计划 §4）——这是两个
+  // token 架构下 stale_since 能"写完就立刻生效"的前提。
+  rpc ResolveClaims(ResolveClaimsRequest) returns (ResolveClaimsResponse);
+
+  // GetBundle 是 gRPC 版的策略下发，内容与 GET /authz/bundle 完全一致。
+  rpc GetBundle(GetBundleRequest) returns (Bundle);
+}
+
+message Role {
+  string code = 1;
+  string name = 2;
+  bool is_system = 3;              // true：u:<sub> 专属角色/自举角色，管理员看不到
+  repeated string permission_keys = 4;
+}
+
+message BatchGetRolesRequest {
+  repeated string codes = 1;
+}
+
+message BatchGetRolesResponse {
+  repeated Role roles = 1;         // 顺序与 codes 一致；查不到的 code 对应位置省略（同 batchGet 惯例）
+}
+
+message ResolveClaimsRequest {
+  string sub = 1;
+}
+
+message ResolveClaimsResponse {
+  repeated string roles = 1;       // 该用户全部未过期角色的 code（纯并集展开前的原始集合）
+  string dept_path = 2;            // 阶段三极简部门表给出；未分配部门时为空串
+  string org_id = 3;               // 阶段三只有一个默认法人（defaultOrgId 配置）
+}
+
+message GetBundleRequest {}
+
+message Bundle {
+  // role code -> 该角色的权限键集合。
+  map<string, RolePermissionKeys> roles = 1;
+  // sub -> 最近一次角色变更/撤销/踢出的 unix 秒时间戳（有界列表，§14.1.6）。
+  map<string, int64> stale_since = 2;
+}
+
+message RolePermissionKeys {
+  repeated string keys = 1;
+}

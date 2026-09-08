@@ -1,0 +1,297 @@
+openapi: 3.0.3
+info:
+  title: infra-authz · 权限账房
+  version: 1.0.0
+  description: |
+    对外 REST 面。⚠️ 与其他组件不同，本组件的路径**不走** `/{domain}/{name}/**`
+    前缀——`/api/me/permissions` 是全平台通用的"我的权限"端点，从前端视角看
+    与"这是哪个组件提供的"无关（设计书 §14.1.8）；`/authz/bundle` 则刻意不
+    经网关暴露，只在内网被各组件 be-sdk 轮询（设计计划 §3）。
+
+# 没有统一 servers 前缀——见上，路径本身已经是最终形态。
+
+# ⚠️ /healthz 不在这份契约里：be-sdk-go 的 NewGinEngine 给每个组件统一挂的，
+# 路径固定是裸根路径 /healthz（§12.3.6）。
+
+paths:
+  /authz/bundle:
+    get:
+      summary: GetBundle（策略下发，本地 PDP 轮询用）
+      description: |
+        ⚠️ 不经网关暴露，仅内网可达（不在 assembly.yaml 的 edge_routes 里）。
+        支持 ETag 条件请求：带 If-None-Match 且未变化时返回 304，body 为空。
+      operationId: getAuthzBundle
+      parameters:
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Bundle" }
+        "304":
+          description: 未变化，沿用调用方已有的那份
+
+  /api/me/permissions:
+    get:
+      summary: 拉本人的 page + action 权限键集合
+      description: |
+        仅需登录（不需要具体权限键）——阶段四实现暂标 besdk.Public，
+        待 be-sdk 补上"已登录但不需要具体权限键"这一档判据（阶段五 Task 5
+        待办，见 README「已知缺口」）。
+      operationId: getMyPermissions
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys: { type: array, items: { type: string } }
+
+  /api/admin/roles:
+    get:
+      summary: 列角色（不含专属角色 u:<sub>）
+      operationId: listRoles
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roles: { type: array, items: { $ref: "#/components/schemas/Role" } }
+    post:
+      summary: 建角色
+      operationId: createRole
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRoleRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Role" }
+
+  /api/admin/roles/{code}:
+    get:
+      summary: 查一个角色详情（含权限键集合）
+      operationId: getRole
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Role" }
+    delete:
+      summary: 删角色（级联删 role_permissions/user_roles）
+      operationId: deleteRole
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+
+  /api/admin/roles/{code}/permissions:
+    post:
+      summary: 给角色勾一个权限键
+      operationId: grantRolePermission
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permission_key]
+              properties:
+                permission_key: { type: string }
+      responses:
+        "200": { description: OK }
+
+  /api/admin/roles/{code}/permissions/{key}:
+    delete:
+      summary: 取消角色的一个权限键
+      operationId: revokeRolePermission
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+
+  /api/admin/users/{sub}/roles:
+    get:
+      summary: 列一个人当前持有的角色（含到期时间）
+      operationId: listUserRoles
+      parameters:
+        - { name: sub, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roles: { type: array, items: { $ref: "#/components/schemas/UserRole" } }
+    post:
+      summary: 给人加角色（可带 expires_at）
+      operationId: grantUserRole
+      parameters:
+        - { name: sub, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role_code]
+              properties:
+                role_code: { type: string }
+                expires_at: { type: string, format: date-time, description: "省略 = 永不过期" }
+      responses:
+        "200": { description: OK }
+
+  /api/admin/users/{sub}/roles/{code}:
+    delete:
+      summary: 撤销一个人的一个角色
+      operationId: revokeUserRole
+      parameters:
+        - { name: sub, in: path, required: true, schema: { type: string } }
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+
+  /api/admin/users/{sub}/permissions:
+    post:
+      summary: 给人单独加一个权限（自动建/复用专属角色 u:<sub>）
+      description: 界面上的"单独给一个人加权限"，底层就是给他的专属角色 u:<sub> 勾一个权限键（设计书 §14.1.3）。
+      operationId: grantUserPermission
+      parameters:
+        - { name: sub, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permission_key]
+              properties:
+                permission_key: { type: string }
+      responses:
+        "200": { description: OK }
+
+  /api/admin/users/{sub}/revoke:
+    post:
+      summary: 踢人——撤销全部角色 + 写 role_changes（配合 refresh token 撤销一起完成登出）
+      operationId: revokeAllUserRoles
+      parameters:
+        - { name: sub, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+
+  /api/admin/departments:
+    get:
+      summary: 列部门（阶段三极简部门表，阶段五由 mdm-org 接管）
+      operationId: listDepartments
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  departments: { type: array, items: { $ref: "#/components/schemas/Department" } }
+    post:
+      summary: 建部门
+      operationId: createDepartment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                parent_id: { type: string, description: "省略 = 顶级部门" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Department" }
+
+  /api/admin/users/{sub}/department:
+    post:
+      summary: 把一个人分到某个部门（ResolveClaims 的 dept_path 来源）
+      operationId: assignUserDepartment
+      parameters:
+        - { name: sub, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [department_id]
+              properties:
+                department_id: { type: string }
+      responses:
+        "200": { description: OK }
+
+components:
+  schemas:
+    Bundle:
+      type: object
+      required: [roles, stale_since]
+      properties:
+        roles:
+          type: object
+          additionalProperties: { type: array, items: { type: string } }
+        stale_since:
+          type: object
+          additionalProperties: { type: integer, description: "unix 秒" }
+
+    Role:
+      type: object
+      required: [code, name, is_system, permission_keys]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        is_system: { type: boolean }
+        permission_keys: { type: array, items: { type: string } }
+
+    CreateRoleRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+
+    UserRole:
+      type: object
+      required: [role_code]
+      properties:
+        role_code: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    Department:
+      type: object
+      required: [id, name, dept_path]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        parent_id: { type: string }
+        dept_path: { type: string }

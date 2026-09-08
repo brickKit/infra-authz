@@ -1,0 +1,13 @@
+version: v2
+modules:
+  - path: contracts
+lint:
+  use:
+    - STANDARD
+  except:
+    # 读接口直接返回聚合根本身（如 rpc GetBundle returns (Bundle)），不强制包一层
+    # <RPC名>Response——这是本项目契约的一贯风格，不是疏漏。
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE
