@@ -4,7 +4,13 @@ kind: Component
 metadata:
   id: infra/authz                    # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 权限账房
-  version: 1.0.2                     # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.3                     # 精确版本，不接受 ^ / ~ / latest
+                                      # v1.0.3：新增 scripts/seed.sh + make seed/seed-clean——
+                                      # 种子授权（给测试用户建角色+灌全部权限键）归本组件自己
+                                      # 持有（总纲 SOP-W-7），自己独立向 Casdoor 查 sub，不吃
+                                      # infra-iam-casdoor 传参，两边各自 make seed 都能单独跑
+                                      # 通；根 infra/seed-data/seed.sh 改成调用它。纯本地开发
+                                      # 工具，无行为/契约变更。
                                       # v1.0.1：纯 Makefile 门禁加固（check-version 新增
                                       # deployment.image 一致性判据），无业务逻辑改动
   description: 权限键册、角色模型（纯并集）、GET /authz/bundle 策略下发、登录期 claims 计算——权限体系里唯一持久化状态的组件
@@ -64,7 +70,7 @@ configSchema:
 
 deployment:
   type: container
-  image: brickenterprise/infra-authz:1.0.2
+  image: brickenterprise/infra-authz:1.0.3
   port: 8223                         # 端口册 registry/ports.tsv
   extraPorts:
     - { name: grpc, port: 9223 }     # → INFRA_AUTHZ_GRPC_ENDPOINT（值仍以 http:// 开头）
