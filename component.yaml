@@ -4,7 +4,20 @@ kind: Component
 metadata:
   id: infra/authz                    # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 权限账房
-  version: 1.0.3                     # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.4                     # 精确版本，不接受 ^ / ~ / latest
+                                      # v1.0.4：make seed 从"只给一个全权限 admin 账号"扩成
+                                      # 真实的多角色权限体系样板——① 直接写库给 dev.superuser
+                                      # 建全权限角色（唯一保留的首次自举步骤，无合法 REST
+                                      # admin API 可用前必须有）；② 换其真实 JWT 后全部改走
+                                      # 真实 REST admin API：建 2 个部门（总公司→华东/华南
+                                      # 分部）+ 3 个权限子集角色（销售代表/仓管/财务只读）+
+                                      # 把 infra-iam-casdoor 建的另外 3 个测试用户分别归到
+                                      # 对应部门+角色。这是总纲 SOP-W-7"数据权限维度要有真实
+                                      # 存在感"这条判据的落地——种子数据不能只有一个全权限
+                                      # admin 视角。seed-clean.sh 同步扩到撤销全部测试角色+
+                                      # 部门树（部门与角色之间无 ON DELETE CASCADE，按
+                                      # user_departments→子部门→父部门的顺序删，避免撞外键）。
+                                      # 无行为/契约变更。
                                       # v1.0.3：新增 scripts/seed.sh + make seed/seed-clean——
                                       # 种子授权（给测试用户建角色+灌全部权限键）归本组件自己
                                       # 持有（总纲 SOP-W-7），自己独立向 Casdoor 查 sub，不吃
@@ -70,7 +83,7 @@ configSchema:
 
 deployment:
   type: container
-  image: brickenterprise/infra-authz:1.0.3
+  image: brickenterprise/infra-authz:1.0.4
   port: 8223                         # 端口册 registry/ports.tsv
   extraPorts:
     - { name: grpc, port: 9223 }     # → INFRA_AUTHZ_GRPC_ENDPOINT（值仍以 http:// 开头）
