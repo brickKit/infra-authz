@@ -4,7 +4,8 @@ kind: Component
 metadata:
   id: infra/authz                    # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 权限账房
-  version: 1.0.4                     # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.5                     # 精确版本，不接受 ^ / ~ / latest
+                                     # v1.0.5：gen/infra/authz 拆成独立嵌套 go module（module 边界切在 v1 目录上一级，因为 Go 模块路径禁止以字面量 /v1 结尾）——铁律六新增第二类白名单（生成物契约包，与 be-sdk-* 同类，设计书§13.3），让 infra-iam-casdoor 能直接 import 这份真身包，取代它自己 vendor 的一份逐字复制镜像。原因：两者都被分进了 go-infra 外壳，真机把二者真实模块合并进同一个进程做集成测试时（阶段四 Task 6）撞上了 vendored-contract 一旦调用方和被调方编译进同一个进程就会在 protobuf 全局注册表撞车的问题，这是 erp-sales 等五个组件之后第六次真实撞到同一类问题（阶段四调研记录 04 §13）。本仓库自己 standalone 构建/测试用本地 replace 完全不受影响， import-scan/单测全绿。无业务行为/契约变更。
                                       # v1.0.4：make seed 从"只给一个全权限 admin 账号"扩成
                                       # 真实的多角色权限体系样板——① 直接写库给 dev.superuser
                                       # 建全权限角色（唯一保留的首次自举步骤，无合法 REST
@@ -83,7 +84,7 @@ configSchema:
 
 deployment:
   type: container
-  image: brickenterprise/infra-authz:1.0.4
+  image: brickenterprise/infra-authz:1.0.5
   port: 8223                         # 端口册 registry/ports.tsv
   extraPorts:
     - { name: grpc, port: 9223 }     # → INFRA_AUTHZ_GRPC_ENDPOINT（值仍以 http:// 开头）

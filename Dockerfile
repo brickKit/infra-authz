@@ -3,9 +3,13 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git
-COPY go.mod go.sum ./
-RUN go mod download
+# ⚠️ gen/infra/authz 是本仓库自己嵌套的 go module，go.mod 里用本地相对
+# 路径 replace 指向它（阶段四调研记录 04 §13）——go mod download 解析
+# replace 时必须已经能读到这个子目录自己的 go.mod，所以不能像常见写法
+# 那样只先 COPY go.mod go.sum 再 download：本地 replace 没有远程校验和
+# 可下载，必须整个源码树都在场才能解析。
 COPY . .
+RUN go mod download
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server  ./backend/cmd/server \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./backend/cmd/migrate
 

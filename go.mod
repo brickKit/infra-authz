@@ -4,12 +4,21 @@ go 1.25.0
 
 require (
 	github.com/brickKit/be-sdk-go v0.2.1
+	github.com/brickKit/infra-authz/gen/infra/authz v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.10.0
 	google.golang.org/grpc v1.83.2
-	google.golang.org/protobuf v1.36.12
 )
+
+// gen/infra/authz 是本仓库自己嵌套的 go module（不是外部依赖，铁律六
+// 第二类白名单，设计书 §13.3）——独立成 module 是为了让 infra-iam-casdoor
+// 直接 import 这份真身包，取代它自己 vendor 的一份逐字复制镜像（阶段四
+// 调研记录 04 §13：vendored-contract 一旦调用方和被调方编译进同一个进程
+// 会在 protobuf 全局注册表撞车，replace 也解决不了，只能改成直接 import
+// 真身）。本仓库自己 standalone 构建时用这条本地 replace；module 边界
+// 切在 v1 目录的上一级，因为 Go 模块路径禁止以字面量 `/v1` 结尾。
+replace github.com/brickKit/infra-authz/gen/infra/authz => ./gen/infra/authz
 
 require (
 	github.com/MicahParks/jwkset v0.11.3 // indirect
@@ -75,5 +84,6 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
