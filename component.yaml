@@ -4,7 +4,8 @@ kind: Component
 metadata:
   id: infra/authz                    # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 权限账房
-  version: 1.0.5                     # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.6                     # 精确版本，不接受 ^ / ~ / latest
+                                     # v1.0.6：同 mdm/customer 这次改动，删掉 deployment.labels 的 prometheus.io/port，理由同上。无业务行为/契约变更。
                                      # v1.0.5：gen/infra/authz 拆成独立嵌套 go module（module 边界切在 v1 目录上一级，因为 Go 模块路径禁止以字面量 /v1 结尾）——铁律六新增第二类白名单（生成物契约包，与 be-sdk-* 同类，设计书§13.3），让 infra-iam-casdoor 能直接 import 这份真身包，取代它自己 vendor 的一份逐字复制镜像。原因：两者都被分进了 go-infra 外壳，真机把二者真实模块合并进同一个进程做集成测试时（阶段四 Task 6）撞上了 vendored-contract 一旦调用方和被调方编译进同一个进程就会在 protobuf 全局注册表撞车的问题，这是 erp-sales 等五个组件之后第六次真实撞到同一类问题（阶段四调研记录 04 §13）。本仓库自己 standalone 构建/测试用本地 replace 完全不受影响， import-scan/单测全绿。无业务行为/契约变更。
                                       # v1.0.4：make seed 从"只给一个全权限 admin 账号"扩成
                                       # 真实的多角色权限体系样板——① 直接写库给 dev.superuser
@@ -84,13 +85,20 @@ configSchema:
 
 deployment:
   type: container
-  image: brickenterprise/infra-authz:1.0.5
+  image: brickenterprise/infra-authz:1.0.6
   port: 8223                         # 端口册 registry/ports.tsv
   extraPorts:
     - { name: grpc, port: 9223 }     # → INFRA_AUTHZ_GRPC_ENDPOINT（值仍以 http:// 开头）
   labels:                            # 平台只搬运，不解释键值。值必须是字符串
     prometheus.io/scrape: "true"
-    prometheus.io/port: "8223"
+    # prometheus.io/port 原来写在这里——阶段四附加 Task 0.1 真机验证
+    # servedBy 时发现这个标签会跟同外壳其它成员的 prometheus.io/port 撞车
+    # 报错（每个组件的值天然不同，servedBy 的 labels 合并规则没有像 env
+    # 变量合并那样排除这类"语义上必然因组件而异"的标签，已反馈给 brickKit，
+    # 见装配仓库 docs/dev/brickKit反馈-servedBy的labels合并漏了排除规则.md）。
+    # 在 brickKit 修复或给出结论之前，暂时从这里删掉，只在合并后的外壳
+    # 自己的条目上保留一份——跟"合并后指标只能走一个共享抓取端口"这个
+    # 事实本来就一致，不是单纯绕过。
     prometheus.io/path: "/metrics"
   resources:
     requests: { cpu: "150m", memory: "192Mi" }
