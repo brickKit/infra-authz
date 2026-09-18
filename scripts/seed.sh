@@ -19,70 +19,25 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$DIR/../../.." && pwd)"
-
-C_GRN=$'\033[32m'; C_RED=$'\033[31m'; C_OFF=$'\033[0m'
-ok()  { echo "${C_GRN}✓${C_OFF} $*"; }
-die() { echo "${C_RED}✗${C_OFF} $*" >&2; exit 1; }
-need() { command -v "$1" >/dev/null 2>&1 || die "缺少命令：$1"; }
+source "$ROOT/infra/scripts/lib/seed-net.sh"
 need python3; need docker
 
-# ⚠️ 真机踩到的坑（阶段四附加 Task 0.5）：brickKit 的 servedBy 合并
-# 部署下，infra-authz/infra-iam-casdoor 都可能被收编进某个外壳，没有
-# 独立容器、也没有发布到宿主机的端口（Casdoor 本身是带外容器，不受
-# 影响，仍然走宿主机映射端口）——这条脚本因此不再直接从宿主机 curl，
-# 改成起一个一次性"工具箱"容器加入 brickkit 自己的 docker 网络，全部
-# curl 改在里面跑；目标地址按 brickKit 自己给依赖方注入 *_ENDPOINT
-# 时用的同一条转换规则拼（componentId+version 转小写、"/"和"."全部
-# 替换成"-"——brickKit 源码 internal/manifest/servicename.go 的
-# ServiceName()，已向 brickKit 确认这条规则不区分"组件是不是自己独立
-# 一个容器"，两种部署形态都用同一个函数算出同一个地址，脚本不需要
-# 检测究竟是哪一种）。
-component_version() {
-  awk -v id="$1" '$0 ~ "^  - id: "id"$"{f=1;next} f&&/^    version:/{print $2;exit}' "$ROOT/brickkit.yaml"
-}
-service_name() { echo "$1-$(component_version "$1")" | tr '[:upper:]' '[:lower:]' | tr '/.' '--'; }
+seed_net_check
+with_toolbox
 
-NET="${BRICKKIT_NET:-brickkit-$(basename "$ROOT")-net}"
-docker network inspect "$NET" >/dev/null 2>&1 || die "docker 网络 $NET 不存在——先把本组件 brickkit up 起来（整套或只装这一个，servedBy 合并部署也可以）"
-
-TOOLBOX="seed-toolbox-$$"
-# ⚠️ 真机踩到的坑：--user 必须跟宿主机当前用户一致——COOKIE_JAR 是
-# host 侧 mktemp 建出来的（属主是宿主机用户，权限 0600），curlimages/curl
-# 镜像默认用镜像自带的非 root 用户跑，不加 --user 的话容器内的 curl
-# 连自己的 cookie jar 都没权限读写（`-c`/`-b` 全部静默失败，Casdoor 返回
-# "Please login first"，症状极难看出是权限问题不是登录逻辑问题）。
-docker run -d --rm --name "$TOOLBOX" --network "$NET" \
-  --user "$(id -u):$(id -g)" --add-host host.docker.internal:host-gateway -v /tmp:/tmp \
-  curlimages/curl:latest sleep 3600 >/dev/null
-curl() { docker exec -i "$TOOLBOX" curl "$@"; }
-
-CASDOOR_URL="${CASDOOR_URL:-http://host.docker.internal:8000}"
-IAM_URL="${IAM_URL:-http://$(service_name infra/iam-casdoor):8200}"
 AUTHZ_REST="${AUTHZ_REST:-http://$(service_name infra/authz):8223}"
 SEED_USER="dev.superuser"
 SEED_ROLE="dev_superuser"
-SEED_APP="local-dev-seed-app"
-SEED_PASSWORD="DevSeed123!"
 
-curl -sf -o /dev/null "$CASDOOR_URL/api/health" || die "Casdoor（$CASDOOR_URL）连不上，先 brickkit up"
-curl -sf -o /dev/null "$AUTHZ_REST/healthz" || die "infra-authz（$AUTHZ_REST）连不上，先 brickkit up"
+check_healthz "$CASDOOR_URL/api/health" "Casdoor"
+check_healthz "$AUTHZ_REST/healthz" "infra-authz"
 
 # 独立向 Casdoor 查 sub，不依赖 infra-iam-casdoor 的 seed.sh 用任何方式
 # 传参给这里——两边各自都能单独跑通（同 mdm-customer/mdm-product 的
 # "组件自己的 make seed 单独跑就能拿到完整数据"判据），只是共享同一个
-# 约定好的用户名。
-COOKIE_JAR="$(mktemp)"
-trap 'rm -f "$COOKIE_JAR"; docker rm -f "$TOOLBOX" >/dev/null 2>&1' EXIT
-curl -c "$COOKIE_JAR" -s -o /dev/null -X POST "$CASDOOR_URL/api/login" \
-  -H "Content-Type: application/json" \
-  -d '{"application":"app-built-in","organization":"built-in","username":"admin","password":"123","autoSignin":true,"type":"login"}'
-sub_of() {
-  curl -b "$COOKIE_JAR" -s "$CASDOOR_URL/api/get-user?id=brickkit/$1" | python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print(d["id"] if d else "")'
-}
+# 约定好的用户名。sub_of 内部按需自动完成 Casdoor admin 登录。
 SEED_SUB="$(sub_of "$SEED_USER")"
 [ -n "$SEED_SUB" ] || die "Casdoor 里找不到 $SEED_USER——先 make -C components/infra/iam-casdoor seed"
-
-psqlx() { docker exec -i be-postgres psql -U postgres -d brickkit_db -v ON_ERROR_STOP=1 "$@"; }
 
 echo "── ① 直接写库：给 $SEED_USER 建全权限角色（唯一一处绕开 REST API 的首次授权）──"
 # 权限键按 registry/permissions.tsv 现读现灌，不依赖 permissions 表里
@@ -111,22 +66,7 @@ echo "   等 18 秒，让本组件自己的权限 bundle 轮询到刚写的授�
 sleep 18
 
 echo "── ② 换 $SEED_USER 的真实 JWT，后面全部走 REST admin API ──"
-APP_JSON="$(curl -b "$COOKIE_JAR" -s "$CASDOOR_URL/api/get-application?id=admin/$SEED_APP")"
-CLIENT_ID="$(echo "$APP_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin, strict=False)["data"]["clientId"])')"
-CLIENT_SECRET="$(echo "$APP_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin, strict=False)["data"]["clientSecret"])')"
-ID_TOKEN="$(curl -s -X POST "$CASDOOR_URL/api/login/oauth/access_token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "grant_type=password" \
-  --data-urlencode "username=$SEED_USER" \
-  --data-urlencode "password=$SEED_PASSWORD" \
-  --data-urlencode "client_id=$CLIENT_ID" \
-  --data-urlencode "client_secret=$CLIENT_SECRET" \
-  --data-urlencode "scope=openid profile email" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id_token"])')"
-[ -n "$ID_TOKEN" ] || die "拿不到 Casdoor id_token"
-ACCESS_TOKEN="$(curl -s -X POST "$IAM_URL/api/iam/token" \
-  -H "Content-Type: application/json" \
-  -d "{\"casdoor_id_token\": \"$ID_TOKEN\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
-[ -n "$ACCESS_TOKEN" ] || die "换应用 JWT 失败"
+ACCESS_TOKEN="$(get_app_jwt "$SEED_USER")"
 ok "已换到真实应用 JWT"
 
 authed() { curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" "$@"; }

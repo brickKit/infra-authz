@@ -4,7 +4,8 @@ kind: Component
 metadata:
   id: infra/authz                    # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 权限账房
-  version: 1.0.7                     # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.8                     # 精确版本，不接受 ^ / ~ / latest
+                                     # v1.0.8：同 erp/inventory 这次改动，scripts/seed.sh 改成 source infra/scripts/lib/seed-net.sh（含 with_toolbox/get_app_jwt/sub_of），本组件特有的"先直接写库建首个全权限角色、再换 JWT 走 REST admin API"这个顺序保持不变，只是每一步换成共享库函数。理由同上。真机跑通 make seed（授权 dev.superuser 全权限角色+建部门树+3 个权限子集角色+4 个测试用户分别归属），无业务行为/契约变更。
                                      # v1.0.7：同上，scripts/seed.sh 全部走 REST admin API，原来假设 CASDOOR/IAM/AUTHZ 三个地址都是宿主机 localhost 端口。改成工具箱容器 + ServiceName() 地址规则；过程中额外发现并修复一个真实权限问题——工具箱容器跑 curlimages/curl 默认非 root 用户，host 侧 mktemp 建出的 cookie jar 权限 0600 属主是宿主机用户，容器内 curl 读写不了，症状是 Casdoor 返回"Please login first"却看不出是权限问题——加 --user "$(id -u):$(id -g)" 修复，这条修复同步应用到全部 6 个受影响脚本。真机在 servedBy 部署下跑通 make seed（①直接写库授权、②-⑤全部走真实 REST admin API）。无业务行为/契约变更。
                                      # v1.0.6：同 mdm/customer 这次改动，删掉 deployment.labels 的 prometheus.io/port，理由同上。无业务行为/契约变更。
                                      # v1.0.5：gen/infra/authz 拆成独立嵌套 go module（module 边界切在 v1 目录上一级，因为 Go 模块路径禁止以字面量 /v1 结尾）——铁律六新增第二类白名单（生成物契约包，与 be-sdk-* 同类，设计书§13.3），让 infra-iam-casdoor 能直接 import 这份真身包，取代它自己 vendor 的一份逐字复制镜像。原因：两者都被分进了 go-infra 外壳，真机把二者真实模块合并进同一个进程做集成测试时（阶段四 Task 6）撞上了 vendored-contract 一旦调用方和被调方编译进同一个进程就会在 protobuf 全局注册表撞车的问题，这是 erp-sales 等五个组件之后第六次真实撞到同一类问题（阶段四调研记录 04 §13）。本仓库自己 standalone 构建/测试用本地 replace 完全不受影响， import-scan/单测全绿。无业务行为/契约变更。
@@ -86,7 +87,7 @@ configSchema:
 
 deployment:
   type: container
-  image: brickenterprise/infra-authz:1.0.7
+  image: brickenterprise/infra-authz:1.0.8
   port: 8223                         # 端口册 registry/ports.tsv
   extraPorts:
     - { name: grpc, port: 9223 }     # → INFRA_AUTHZ_GRPC_ENDPOINT（值仍以 http:// 开头）
