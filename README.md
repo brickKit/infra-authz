@@ -7,7 +7,7 @@ Permission key catalogue, roles as plain unions, the policy bundle served at /au
 ## Use it in a project
 
 ```bash
-brickkit add infra/authz@2.0.0
+brickkit add infra/authz@2.0.1
 brickkit up
 ```
 

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: infra-authz · 权限账房
-  version: 2.0.0
+  version: 2.0.1
   description: |
     对外 REST 面。⚠️ 与其他组件不同，本组件的路径**不走** `/{domain}/{name}/**`
     前缀——`/api/me/permissions` 是全平台通用的"我的权限"端点，从前端视角看

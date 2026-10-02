@@ -4,7 +4,7 @@ kind: Component
 metadata:
   id: infra/authz
   name: Authorization
-  version: 2.0.0
+  version: 2.0.1
   description: Permission key catalogue, roles as plain unions, the policy bundle served at /authz/bundle, and login-time claims.
   repository: https://github.com/brickKit/infra-authz
   license: Apache-2.0
