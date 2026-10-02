@@ -95,7 +95,10 @@ func (r *Repo) AssignUserDepartment(ctx context.Context, sub string, departmentI
 }
 
 // DeptPathFor 给 ResolveClaims：未分配部门时返回空串，不是错误——还没有
-// 部门归属的用户是合法状态。
+// 部门归属的用户是合法状态。空串的含义是"没有部门"，不是"整棵树"：
+// be-sdk-go v0.5.0 起 SDK 把它解读成 org 维什么都不命中、只剩本人；
+// 看全公司要分到根部门，路径是 /<根id>/。本组件从不签发 "/"（顶层部门的
+// 路径也是 /<id>/），"/" 是留给以后跨多棵树的显式根标记。
 func (r *Repo) DeptPathFor(ctx context.Context, sub string) (string, error) {
 	var path string
 	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {

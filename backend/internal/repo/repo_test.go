@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -506,6 +507,34 @@ func TestDeptPathFor_未分配返回空串不报错(t *testing.T) {
 	}
 	if path != "" {
 		t.Fatalf("未分配部门应该返回空串，得到 %q", path)
+	}
+}
+
+// 顶层部门的路径是 /<id>/，绝不是 "/" 也不是空串：SDK 把 "/" 当成整棵树的
+// 显式根标记（看全部）、把空串当成"没有部门"（只剩本人）。本组件签发的
+// 真实路径若落成其中之一，分到顶层部门的人就会被放大或收窄成另一种身份。
+func TestCreateDepartment_顶层部门dept_path是斜杠id斜杠不是根标记(t *testing.T) {
+	ctx := context.Background()
+	r := testRepo(t)
+	top, err := r.CreateDepartment(ctx, uniqueID("top-dept"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/" + strconv.FormatInt(top.ID, 10) + "/"
+	if top.DeptPath != want {
+		t.Fatalf("顶层部门 dept_path 应为 %q，得到 %q", want, top.DeptPath)
+	}
+
+	sub := uniqueID("sub")
+	if err := r.AssignUserDepartment(ctx, sub, top.ID); err != nil {
+		t.Fatal(err)
+	}
+	path, err := r.DeptPathFor(ctx, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != want {
+		t.Fatalf("分到顶层部门的人 ResolveClaims 该看到 %q，得到 %q", want, path)
 	}
 }
 
