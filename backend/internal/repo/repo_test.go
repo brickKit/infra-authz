@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // §12.4：不用 lib/pq，驱动名注册为 "pgx"
+	_ "github.com/jackc/pgx/v5/stdlib" // 锁定栈用 pgx，不用 lib/pq；驱动名注册为 "pgx"
 )
 
 func testDB(t *testing.T) *sql.DB {
@@ -496,7 +496,7 @@ func TestGrantRolePermission_权限键不存在返回NotFound(t *testing.T) {
 	}
 }
 
-// ── 部门（阶段三极简表）────────────────────────────────────────────
+// ── 部门（极简表）────────────────────────────────────────────
 
 func TestDeptPathFor_未分配返回空串不报错(t *testing.T) {
 	r := testRepo(t)
