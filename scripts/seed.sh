@@ -6,10 +6,15 @@
 #    持有 infra.authz.admin，没人能走 REST admin API 做首次授权；先有一个
 #    "已经有权限的账号"，才能用它去调 admin API 授权别人。
 # ② 有了这个账号之后，②往后全部走真实 REST admin API（不再直接写库）：
-#    建 2 个部门（华东/华南）+ 3 个权限子集角色（销售/仓管/财务只读），
-#    把 infra-iam-casdoor 建的另外 3 个测试用户分别归到对应部门+角色——
-#    种子数据不能只有一个全权限 admin 视角，数据范围要有真实的部门与岗位
-#    才验得出来。
+#    建部门树（总公司 → 华东/华南）+ 3 个权限子集角色（销售/仓管/财务只读），
+#    把万能测试用户分到总公司（根部门），把 infra-iam-casdoor 建的另外 3 个
+#    测试用户分别归到对应部门+角色——种子数据不能只有一个全权限 admin 视角，
+#    数据范围要有真实的部门与岗位才验得出来。
+#
+# 部门归属与 org 维（按 dept_path 前缀）的关系：没有部门的人 dept_path 为空，
+# SDK 把它当成"org 维什么都不命中、只剩本人的行"，不是"看全部"。所以要看
+# 全公司的人分到根部门（路径 /<根id>/，前缀覆盖整棵树）；只有不读 dept_path
+# 的岗位（财务只读走 legal_entity 维）才可以不分部门。
 #
 # 用法：make -C components/infra/authz seed——要求 Casdoor 已经在跑，且
 # infra-iam-casdoor 的种子用户已存在（本脚本会自己去 Casdoor 查，没有
@@ -155,8 +160,14 @@ ensure_role dev_finance_viewer "「本地测试」财务只读"
 grant_perm dev_finance_viewer erp.finance.view
 ok "dev_finance_viewer 权限键授予完成"
 
-echo "── ⑤ 把另外 3 个测试用户分别归到对应部门 + 授予对应角色 ──"
-assign_dept() { authed -X POST "$AUTHZ_REST/api/admin/users/$1/department" -d "{\"department_id\":\"$2\"}" >/dev/null; }
+echo "── ⑤ 把 $SEED_USER 分到总公司（根部门），另外 3 个测试用户分别归到对应部门 + 授予对应角色 ──"
+# 分部门必须查状态码：分配悄悄失败的人 dept_path 为空，在部门视图里什么都看不到，
+# 到很后面才会被发现是种子没灌好。
+assign_dept() {
+  local code
+  code="$(authed -o /dev/null -w '%{http_code}' -X POST "$AUTHZ_REST/api/admin/users/$1/department" -d "{\"department_id\":\"$2\"}")"
+  [ "$code" = 200 ] || die "把 sub=$1 分到部门 $2 失败（HTTP $code）"
+}
 grant_role()  { authed -X POST "$AUTHZ_REST/api/admin/users/$1/roles" -d "{\"role_code\":\"$2\"}" >/dev/null; }
 
 SALES_SUB="$(sub_of dev.sales.east)"
@@ -165,10 +176,15 @@ FINANCE_SUB="$(sub_of dev.finance.viewer)"
 [ -n "$SALES_SUB" ] && [ -n "$WAREHOUSE_SUB" ] && [ -n "$FINANCE_SUB" ] \
   || die "Casdoor 里找不到某个测试用户——先 make -C components/infra/iam-casdoor seed"
 
+# 万能测试用户坐在根部门：dept_path 是 /<根id>/，按前缀看得到总公司及以下每个部门的行。
+# 不分部门的话 dept_path 为空，在部门视图里是空列表、在 owner OR org 判据里只剩自己建的行。
+assign_dept "$SEED_SUB" "$ROOT_DEPT_ID"
 assign_dept "$SALES_SUB" "$EAST_DEPT_ID";       grant_role "$SALES_SUB" dev_sales_rep
 assign_dept "$WAREHOUSE_SUB" "$SOUTH_DEPT_ID";  grant_role "$WAREHOUSE_SUB" dev_warehouse_manager
-grant_role "$FINANCE_SUB" dev_finance_viewer   # 财务只读不归属具体部门：部门维度落在部门树上，财务视角本身是跨部门的
+grant_role "$FINANCE_SUB" dev_finance_viewer   # 财务只读不归属具体部门：它只有 erp.finance.view，finance 按 legal_entity 维限定、不读 dept_path；
+                                               # 没有部门就意味着它在任何按部门限定的列表里只看得到自己的行，这正是想要的
 
+ok "$SEED_USER（sub=$SEED_SUB）→ 总公司（根部门）"
 ok "dev.sales.east（sub=$SALES_SUB）→ 华东分部 + dev_sales_rep"
 ok "dev.warehouse.south（sub=$WAREHOUSE_SUB）→ 华南分部 + dev_warehouse_manager"
 ok "dev.finance.viewer（sub=$FINANCE_SUB）→ dev_finance_viewer（无部门归属）"

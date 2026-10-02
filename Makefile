@@ -108,7 +108,7 @@ image:  ## brickkit build 本组件，并确认镜像里有 sh + wget（健康�
 	  && echo "✓ 镜像 $(REPO):$(VERSION) 里有 sh + wget + component.yaml"
 
 ##@ 本地开发数据（只给本地 / 演示用，不进部署与 CI）
-seed:  ## 给种子用户授权：dev.superuser 全权限角色、部门树、三个岗位角色（幂等）。要求本组件已起、iam-casdoor 的种子用户已建
+seed:  ## 给种子用户授权：dev.superuser 全权限角色并分到根部门、部门树、三个岗位角色（幂等）。要求本组件已起、iam-casdoor 的种子用户已建
 	@bash scripts/seed.sh
 
 seed-clean:  ## 撤销 seed 建的角色、授权与部门树
