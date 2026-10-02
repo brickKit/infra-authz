@@ -5,5 +5,5 @@ import (
 	"github.com/brickKit/infra-authz/v2/backend/module"
 )
 
-// ⚠️ 这个文件永远只有这一行（§12.5.3、决策 109）。
+// 这个文件只有这一行：单跑与进外壳走同一个 module.New，装配逻辑全在 SDK 里。
 func main() { besdk.RunStandalone(module.New) }

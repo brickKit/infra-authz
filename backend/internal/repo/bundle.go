@@ -8,8 +8,8 @@ import (
 	besdk "github.com/brickKit/be-sdk-go"
 )
 
-// Bundle 是 GET /authz/bundle 与 gRPC GetBundle 共用的下发内容（设计书
-// §14.1.4）。JSON 标签决定了 REST 的线上格式，gRPC 侧在 grpc.go 里另外
+// Bundle 是 GET /authz/bundle 与 gRPC GetBundle 共用的下发内容：
+// role → 权限键，加一个有界的 stale_since。JSON 标签决定了 REST 的线上格式，gRPC 侧在 grpc.go 里另外
 // 转成 proto message——两边内容必须完全一致，来源都是这一个函数。
 type Bundle struct {
 	Roles      map[string][]string `json:"roles"`
@@ -17,16 +17,16 @@ type Bundle struct {
 }
 
 // ComputeBundle 现算现返——roles/role_permissions 永远热、几百行恒小，
-// stale_since 只看一个有界窗口，都不需要缓存或预计算（设计计划 §2）。
+// stale_since 只看一个有界窗口，都不需要缓存或预计算。
 //
 // ⚠️ roles 必须包含全部角色，含 is_system=true 的专属角色——持有
 // u:<sub> 的用户的 JWT.roles[] 里就带着这个字符串，bundle 的 roles 里
 // 找不到它，be-sdk 展开出来就是空集，静默失权、没有任何症状。这是本
 // 组件测试覆盖优先级最高的一条断言。
 //
-// staleWindow 通常传 2× access token TTL（configSchema 的
-// accessTokenTtlSeconds，设计书 §14.1.6）——调用方（service 层）负责算
-// 这个窗口，本层只管拿窗口边界去查。
+// staleWindow 通常传 2× access token TTL（ACCESS_TOKEN_TTL_SECONDS）：
+// 比这更早的变更，受影响的 token 早已过期，不必再列出——调用方（service
+// 层）负责算这个窗口，本层只管拿窗口边界去查。
 func (r *Repo) ComputeBundle(ctx context.Context, staleWindow time.Duration) (*Bundle, error) {
 	b := &Bundle{Roles: map[string][]string{}, StaleSince: map[string]int64{}}
 	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
@@ -68,7 +68,7 @@ func loadRolesInto(ctx context.Context, tx *sql.Tx, b *Bundle) error {
 	return rows.Err()
 }
 
-// loadStaleSinceInto 合并两个来源（设计书 §14.1.6、迁移文件注释）：
+// loadStaleSinceInto 合并两个来源：
 //  1. role_changes：granted/revoked/kicked 三种显式管理员动作
 //  2. user_roles.expires_at：到期是纯粹的时间流逝，不需要任何人在到期
 //     那一刻写一行——直接从落在窗口内、且已经过去的 expires_at 推导

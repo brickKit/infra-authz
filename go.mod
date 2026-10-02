@@ -10,13 +10,10 @@ require (
 	google.golang.org/grpc v1.83.2
 )
 
-// gen/infra/authz 是本仓库自己嵌套的 go module（不是外部依赖，铁律六
-// 第二类白名单，设计书 §13.3）——独立成 module 是为了让 infra-iam-casdoor
-// 直接 import 这份真身包，取代它自己 vendor 的一份逐字复制镜像（阶段四
-// 调研记录 04 §13：vendored-contract 一旦调用方和被调方编译进同一个进程
-// 会在 protobuf 全局注册表撞车，replace 也解决不了，只能改成直接 import
-// 真身）。本仓库自己 standalone 构建时用这条本地 replace；module 边界
-// 切在 v1 目录的上一级，因为 Go 模块路径禁止以字面量 `/v1` 结尾。
+// gen/infra/authz 是本仓库里嵌套的独立模块：调用方（如 infra/iam-casdoor）只
+// require 契约包、不拉整个组件，进同一个外壳时最小版本选择只选出一份生成代码，
+// protobuf 注册表不会重复注册。模块路径不能以 /v1 结尾，所以边界切在 v1 的上一级。
+// 下面的 replace 只给本仓库自己构建用；别人拉取时用的是 require 里的契约包 tag。
 replace github.com/brickKit/infra-authz/gen/infra/authz => ./gen/infra/authz
 
 require (

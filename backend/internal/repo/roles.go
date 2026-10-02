@@ -17,7 +17,7 @@ type Role struct {
 	PermissionKeys []string
 }
 
-// CreateRole 建一个由管理员命名的角色。u: 前缀保留给专属角色（§14.1.3），
+// CreateRole 建一个由管理员命名的角色。u: 前缀保留给专属角色，
 // 手工创建会被拒绝——那条路径只走 EnsureRole。
 func (r *Repo) CreateRole(ctx context.Context, code, name string) (*Role, error) {
 	if strings.HasPrefix(code, "u:") {
@@ -37,7 +37,7 @@ func (r *Repo) CreateRole(ctx context.Context, code, name string) (*Role, error)
 	return &Role{Code: code, Name: name}, nil
 }
 
-// EnsureRole 是"给这个人单独加一个权限"背后的机制（§14.1.3）：幂等地
+// EnsureRole 是"给这个人单独加一个权限"背后的机制：幂等地
 // 拿到一个角色，不存在就建。专属角色与自举角色都走这条路，不走
 // CreateRole（后者拒绝 u: 前缀）。
 func (r *Repo) EnsureRole(ctx context.Context, code, name string, isSystem bool) error {
@@ -82,7 +82,7 @@ func (r *Repo) GetRole(ctx context.Context, code string) (*Role, error) {
 }
 
 // ListRoles 列管理员能管的角色——专属角色（is_system=true）不出现在这里，
-// 那些只在"给某人授权"的界面里作为实现细节存在，管理员看不到（§14.1.3）。
+// 那些只在"给某人授权"的界面里作为实现细节存在，管理员看不到。
 // ⚠️ 这条判据只影响这个列表，不影响 ComputeBundle：bundle 的 roles 字段
 // 必须包含全部角色（含 is_system），否则持有专属角色的人会静默失权
 // （见 bundle.go 顶部注释）。
@@ -141,8 +141,8 @@ func (r *Repo) DeleteRole(ctx context.Context, code string) error {
 //
 // ⚠️ 这条不写 role_changes、不影响任何人的 stale_since——角色内容变了
 // 靠 bundle 的 roles 字段直接刷新（下一次轮询 ~15 秒内，所有持有该角色
-// 的人自动拿到新内容），不需要让任何已签发的 token 失效（设计书
-// §14.1.6：这是与"人的角色变了"完全不同的一档）。
+// 的人自动拿到新内容），不需要让任何已签发的 token 失效——token 里只有
+// 角色，没有权限键。这是与"人的角色变了"完全不同的一档。
 func (r *Repo) GrantRolePermission(ctx context.Context, roleCode, permissionKey string) error {
 	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `

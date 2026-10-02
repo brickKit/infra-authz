@@ -1,5 +1,5 @@
-// Package grpc 实现 infra.authz.v1.AuthzService——内部 gRPC 面（设计
-// 计划 §3）。HTTP 与 gRPC 共用同一个 service.Service，业务逻辑只写一遍。
+// Package grpc 实现 infra.authz.v1.AuthzService——内部 gRPC 面。
+// HTTP 与 gRPC 共用同一个 service.Service，业务逻辑只写一遍。
 package grpc
 
 import (
@@ -47,7 +47,7 @@ func (s *server) BatchGetRoles(ctx context.Context, req *authzv1.BatchGetRolesRe
 }
 
 // ResolveClaims 给 infra-iam-casdoor：sub -> roles[]/dept_path/org_id。
-// ⚠️ 登录与刷新时各调一次，绝不缓存（设计计划 §4）。
+// ⚠️ 登录与刷新时各调一次，绝不缓存：角色一变，下一次刷新就要拿到新角色。
 func (s *server) ResolveClaims(ctx context.Context, req *authzv1.ResolveClaimsRequest) (*authzv1.ResolveClaimsResponse, error) {
 	roles, deptPath, orgID, err := s.svc.ResolveClaims(ctx, req.Sub)
 	if err != nil {

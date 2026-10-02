@@ -1,6 +1,6 @@
-// 阶段三的极简部门表——只为给 ResolveClaims 一个 dept_path 字符串
-// （设计计划 §2、§9 待决问题 1）。⚠️ 临时的：阶段五 mdm-org 上线后这张
-// 表连同 user_departments 一起退役，不要在这上面投入超出"能用"的设计。
+// 极简部门表——只为给 ResolveClaims 一个 dept_path 字符串。⚠️ 组织架构
+// 主数据不归本组件：有了组织主数据组件之后，这张表连同 user_departments
+// 一起退役，不要在这上面投入超出"能用"的设计。
 package repo
 
 import (
@@ -77,8 +77,9 @@ func (r *Repo) ListDepartments(ctx context.Context) ([]*Department, error) {
 }
 
 // AssignUserDepartment 把 sub 分到某个部门——幂等，重复分配/改分配都是
-// 简单覆盖（不像角色分配那样需要 stale_since：dept_path 走 ResolveClaims，
-// 登录/刷新时才读一次，见设计计划 §4 对两个 token 架构的说明）。
+// 简单覆盖（不像角色分配那样写 role_changes、进 stale_since：dept_path 走
+// ResolveClaims，在下一次登录或刷新 token 时生效，最长滞后一个 access
+// token 的有效期）。
 func (r *Repo) AssignUserDepartment(ctx context.Context, sub string, departmentID int64) error {
 	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
@@ -93,8 +94,8 @@ func (r *Repo) AssignUserDepartment(ctx context.Context, sub string, departmentI
 	return nil
 }
 
-// DeptPathFor 给 ResolveClaims：未分配部门时返回空串，不是错误——阶段三
-// 大量用户可能还没有部门归属，这是合法的过渡态。
+// DeptPathFor 给 ResolveClaims：未分配部门时返回空串，不是错误——还没有
+// 部门归属的用户是合法状态。
 func (r *Repo) DeptPathFor(ctx context.Context, sub string) (string, error) {
 	var path string
 	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {

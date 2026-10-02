@@ -1,6 +1,7 @@
 // Package http 是 infra-authz 的 REST 面。⚠️ 路径形状与其他组件不同——
-// 不走 /{domain}/{name}/** 前缀，见 contracts/authz.openapi.yaml 顶部
-// 注释与设计计划 §3。
+// 不走 /{domain}/{name}/** 前缀：/api/me/permissions、/api/admin/** 是全平台
+// 共用的路径，与"哪个组件提供"无关；/authz/bundle 只在内网被各组件轮询
+// （见 contracts/authz.openapi.yaml 顶部说明）。
 package http
 
 import (
@@ -19,15 +20,12 @@ import (
 )
 
 // RegisterRoutes 挂载全部路由。
-//
-// 阶段三 Task 6：权限键从阶段二的 besdk.Public 换成真实键——
-//   - /authz/bundle 永久保持 Public——它本身就是其他组件判权限的数据
-//     来源，不能靠它自己判权限（鸡生蛋），且不进 edge_routes、不经网关
-//     暴露（assembly.yaml 注释、设计计划 §3）。
-//   - /api/me/permissions 换成 besdk.Authenticated（Task 4/5 发现并补
-//     上的哨兵值）——任何登录用户都该能查自己的权限，不需要具体权限键。
-//   - /api/admin/** 全部换成 infra.authz.admin——本组件自吃自己下发的
-//     bundle（README「自我鉴权」一节），不是需要绕开的特例。
+//   - /authz/bundle 是 Public：它本身就是所有组件判权限的数据来源，不能靠
+//     它自己判权限；它不进 edge_routes、不经网关暴露。
+//   - /api/me/permissions 是 besdk.Authenticated：任何登录用户都能查自己的
+//     权限，不需要具体权限键。
+//   - /api/admin/** 全部要 infra.authz.admin：本组件的 AUTHZ_BUNDLE_URL 指向
+//     自己，管理 API 用的是自己下发的 bundle，与别的组件同一套判定。
 func RegisterRoutes(eng *gin.Engine, svc *service.Service) {
 	besdk.GET(eng, "/authz/bundle", besdk.Public, getBundleHandler(svc))
 
@@ -77,10 +75,8 @@ func getBundleHandler(svc *service.Service) gin.HandlerFunc {
 }
 
 // myPermissionsHandler：sub 从已验签 JWT 的 Claims 取（besdk.ScopeOf(ctx).Owner
-// 就是 claims.Sub，同 erp-inventory/erp-finance 拿调用者身份的既有判据）
-// ——阶段三 Task 4 遗留的临时 X-Authz-Debug-Sub header 到这里正式退役。
-// besdk.Authenticated 已经保证走到这里时 ctx 里一定有 Claims，不需要
-// 再判断"取不到就当未登录"这种分支。
+// 就是 claims.Sub），不接受任何请求头或参数指定"查谁"。besdk.Authenticated
+// 已经保证走到这里时 ctx 里一定有 Claims，不需要"取不到就当未登录"的分支。
 func myPermissionsHandler(svc *service.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		sub := besdk.ScopeOf(c.Request.Context()).Owner

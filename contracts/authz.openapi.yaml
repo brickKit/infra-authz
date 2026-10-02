@@ -1,17 +1,17 @@
 openapi: 3.0.3
 info:
   title: infra-authz · 权限账房
-  version: 1.0.0
+  version: 2.0.0
   description: |
     对外 REST 面。⚠️ 与其他组件不同，本组件的路径**不走** `/{domain}/{name}/**`
     前缀——`/api/me/permissions` 是全平台通用的"我的权限"端点，从前端视角看
-    与"这是哪个组件提供的"无关（设计书 §14.1.8）；`/authz/bundle` 则刻意不
-    经网关暴露，只在内网被各组件 be-sdk 轮询（设计计划 §3）。
+    与"这是哪个组件提供的"无关；`/authz/bundle` 则刻意不经网关暴露，只在
+    内网被各组件 be-sdk 轮询。
 
 # 没有统一 servers 前缀——见上，路径本身已经是最终形态。
 
 # ⚠️ /healthz 不在这份契约里：be-sdk-go 的 NewGinEngine 给每个组件统一挂的，
-# 路径固定是裸根路径 /healthz（§12.3.6）。
+# 路径固定是裸根路径 /healthz。
 
 paths:
   /authz/bundle:
@@ -38,9 +38,8 @@ paths:
     get:
       summary: 拉本人的 page + action 权限键集合
       description: |
-        仅需登录（不需要具体权限键）——阶段四实现暂标 besdk.Public，
-        待 be-sdk 补上"已登录但不需要具体权限键"这一档判据（阶段五 Task 5
-        待办，见 README「已知缺口」）。
+        仅需登录（besdk.Authenticated，不需要具体权限键）；sub 取自已验签
+        的 JWT，只能查自己。
       operationId: getMyPermissions
       responses:
         "200":
@@ -175,7 +174,7 @@ paths:
   /api/admin/users/{sub}/permissions:
     post:
       summary: 给人单独加一个权限（自动建/复用专属角色 u:<sub>）
-      description: 界面上的"单独给一个人加权限"，底层就是给他的专属角色 u:<sub> 勾一个权限键（设计书 §14.1.3）。
+      description: 界面上的"单独给一个人加权限"，底层就是给他的专属角色 u:<sub> 勾一个权限键。
       operationId: grantUserPermission
       parameters:
         - { name: sub, in: path, required: true, schema: { type: string } }
@@ -202,7 +201,7 @@ paths:
 
   /api/admin/departments:
     get:
-      summary: 列部门（阶段三极简部门表，阶段五由 mdm-org 接管）
+      summary: 列部门（极简部门表，只为给出 dept_path；组织主数据不归本组件）
       operationId: listDepartments
       responses:
         "200":

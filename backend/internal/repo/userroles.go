@@ -19,8 +19,8 @@ type UserRole struct {
 //
 // ⚠️ 这条会写 role_changes（changed=true 时），因为"人的角色变了"必须
 // 让持有者的 JWT 尽快变 stale——他现有的 token 里没有这个新角色，靠
-// bundle 刷新是等不到的，必须走 stale_since → 401 → 静默刷新这条路
-// （设计书 §14.1.6）。changed 用"这次 upsert 是不是真的改变了什么"
+// bundle 刷新是等不到的，必须走 stale_since → 401 → 静默刷新这条路。
+// changed 用"这次 upsert 是不是真的改变了什么"
 // 判定：同一个角色、同一个到期时间再授一次是纯粹的无操作，不该也没
 // 必要让人重新刷新一次 token。
 func (r *Repo) GrantUserRole(ctx context.Context, sub, roleCode string, expiresAt *time.Time) error {
@@ -68,9 +68,9 @@ func (r *Repo) RevokeUserRole(ctx context.Context, sub, roleCode string) error {
 // 个特定角色，见迁移里 role_changes.role_code 允许 NULL 的注释）。
 //
 // ⚠️ 这里只处理"人这边"（撤销角色分配），refresh token 的撤销是
-// infra-iam-casdoor 的职责（登出链路的另一半，设计计划 §5）——两者合起来
-// 才是完整的"踢人"（§14.1.6：踢人靠 stale_since 让他 401，再靠 refresh
-// token 已撤销让他刷新失败，最终登出）。
+// infra-iam-casdoor 的职责（登出链路的另一半）——两者合起来才是完整的
+// "踢人"：靠 stale_since 让他 401，再靠 refresh token 已撤销让他刷新失败，
+// 最终登出。
 func (r *Repo) RevokeAllUserRoles(ctx context.Context, sub string) error {
 	return besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `DELETE FROM user_roles WHERE sub = $1`, sub)
@@ -90,7 +90,7 @@ func (r *Repo) RevokeAllUserRoles(ctx context.Context, sub string) error {
 
 // ListUserRoles 列 sub 当前有效的角色分配（已过期的不出现——那些对
 // "他现在有什么"这个问题已经没有意义，历史追溯走 role_changes/审计事件，
-// 不走这张表，设计计划 §7）。
+// 不走这个列表；过期行仍留在表里）。
 func (r *Repo) ListUserRoles(ctx context.Context, sub string) ([]UserRole, error) {
 	var out []UserRole
 	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
@@ -115,8 +115,8 @@ func (r *Repo) ListUserRoles(ctx context.Context, sub string) ([]UserRole, error
 }
 
 // ActiveRoleCodes 是 ResolveClaims 用的：sub 当前全部未过期角色的 code
-// 原始集合（不展开权限键——JWT 只带角色，权限键的展开在 be-sdk 里，
-// 设计书 §14.1.5）。
+// 原始集合（不展开权限键——JWT 只带角色，权限键的展开在 be-sdk 里：
+// 管理员的全部权限键塞进 JWT 会顶爆请求头）。
 func (r *Repo) ActiveRoleCodes(ctx context.Context, sub string) ([]string, error) {
 	codes := make([]string, 0)
 	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
@@ -140,8 +140,7 @@ func (r *Repo) ActiveRoleCodes(ctx context.Context, sub string) ([]string, error
 	return codes, wrap("查用户当前角色", err)
 }
 
-// recordRoleChange 写一行 role_changes——stale_since 有界列表的来源
-// （设计计划 §2、§14.1.6）。必须与触发它的那次 user_roles 变更在同一个
+// recordRoleChange 写一行 role_changes——stale_since 有界列表的来源。必须与触发它的那次 user_roles 变更在同一个
 // 事务里提交，两者要么都成功要么都不发生。
 func recordRoleChange(ctx context.Context, tx *sql.Tx, sub string, roleCode *string, changeType string) error {
 	_, err := tx.ExecContext(ctx,

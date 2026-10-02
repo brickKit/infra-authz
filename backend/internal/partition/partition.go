@@ -1,10 +1,9 @@
 // Package partition 是 Module.Start 的后台循环：为 event_outbox 自动建
-// 未来的周分区（决策 54、§11.5.1，与其余组件同一套判据），为
-// role_changes 自动建未来的月分区（设计计划 §7：它按变更时间归档，
-// 窗口是月，不是周——同 erp-inventory 的 inventory_movements 判据）。
+// 未来的周分区（与其余组件同一套规则），为 role_changes 自动建未来的
+// 月分区（它按变更时间归档，量小，窗口是月，不是周）。
 //
-// ⚠️ 本组件没有 event_inbox——阶段三没有任何消费者（唯一的弱依赖
-// mdm/org 要到阶段五才存在），YAGNI：不为不存在的消费面建表建分区任务。
+// ⚠️ 本组件没有 event_inbox——它不消费任何事件，不为不存在的消费面建表
+// 建分区任务。
 package partition
 
 import (
@@ -27,7 +26,8 @@ var weeklyPartitionedTables = []string{"event_outbox"}
 var monthlyPartitionedTables = []string{"role_changes"}
 
 // Start 立刻检查一次周分区与月分区，之后每 24 小时检查一次。单次失败只
-// 记日志，不让循环退出——下一轮还有机会补上（§13.3 铁律七）。
+// 记日志，不让循环退出——下一轮还有机会补上；后台循环退出就再也不会建分区，
+// 到了没有分区的那一周写 outbox 直接失败。
 func Start(ctx context.Context, db *sql.DB, role, schema string, logger *slog.Logger) error {
 	checkOnce := func() {
 		if err := ensureAllWeekly(ctx, db, role, schema); err != nil {
