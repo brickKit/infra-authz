@@ -4,6 +4,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 
 	authzv1 "github.com/brickKit/infra-authz/gen/infra/authz/v1"
 
@@ -26,15 +27,19 @@ func toProtoRole(r *repo.Role) *authzv1.Role {
 	}
 }
 
-// BatchGetRoles 是防 N+1 的唯一合法批量读方式（§3.8）。查不到的 code
-// 直接在结果里省略（同 batchGet 惯例），不报错——调用方按 code 对不上
-// 判断哪些缺失。
+// BatchGetRoles 是按一批 code 读角色的批量接口（调用方不必逐个调）。
+// 查不到的 code 直接在结果里省略（batchGet 惯例），不报错——调用方按 code
+// 对不上判断哪些缺失；别的错误（数据库不可用）照常返回，否则调用方会把
+// "库挂了"当成"这些角色都不存在"。
 func (s *server) BatchGetRoles(ctx context.Context, req *authzv1.BatchGetRolesRequest) (*authzv1.BatchGetRolesResponse, error) {
 	roles := make([]*authzv1.Role, 0, len(req.Codes))
 	for _, code := range req.Codes {
 		r, err := s.svc.GetRole(ctx, code)
-		if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
 			continue
+		}
+		if err != nil {
+			return nil, service.ToStatus(err)
 		}
 		roles = append(roles, toProtoRole(r))
 	}
