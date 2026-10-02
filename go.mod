@@ -3,7 +3,7 @@ module github.com/brickKit/infra-authz/v2
 go 1.25.11
 
 require (
-	github.com/brickKit/be-sdk-go v0.4.0
+	github.com/brickKit/be-sdk-go v0.5.0
 	github.com/brickKit/infra-authz/gen/infra/authz v1.0.5
 	github.com/gin-gonic/gin v1.12.0
 	github.com/jackc/pgx/v5 v5.10.0
