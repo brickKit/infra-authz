@@ -11,7 +11,7 @@ The bookkeeper of the permission system. It keeps the permission-key catalogue, 
 - Role grants (`user_roles`, optionally with an expiry) and the bounded list of recent grant changes (`role_changes`) that makes already-issued tokens stale.
 - The bundle served at `GET /authz/bundle`: role → permission keys, plus `stale_since` (sub → time of the latest change to that person's roles within twice the access-token lifetime).
 - Login-time claims: `ResolveClaims` gives the IAM adapter a person's roles, department path and organisation ID.
-- A minimal department table (`departments`, `user_departments`) that exists only to give `ResolveClaims` a department path.
+- A minimal department table (`departments`, `user_departments`) that exists only to give `ResolveClaims` a department path. A path holds the department's ancestors and itself, `/<id>/…/`: a top-level department is `/<id>/`, never `/`. A person assigned to no department gets an empty string. The SDKs (`be-sdk-go`, `be-sdk-python`, `be-sdk-ts`) from v0.5.0 read an empty path as "no department", not as the whole tree: the `org` dimension of a data scope matches no row and only the person's own rows remain. `/` is the explicit marker for the whole tree; this component never issues it.
 
 **Does not own**
 
@@ -28,8 +28,9 @@ The bookkeeper of the permission system. It keeps the permission-key catalogue, 
 - **The permission-key registry** as a tab-separated file with the header `key title type owner_component deprecated`, given to `PERMISSION_CATALOG` as `file://<path>` (in the BrickEnterprise project `file://registry/permissions.tsv`). It is read when the deployment files are generated; after a key is added, the next `brickkit up` recreates this component and the key is synchronised at start. Nothing else needs regenerating.
 - **The first administrator**: put the deployer's `sub` in `BOOTSTRAP_ADMIN_SUB`; at start the component grants them `authz_admin` (idempotent). Left empty, nobody can use the admin API until someone grants `authz_admin` directly in the database.
 - **NATS** reachable at `NATS_URL`: the outbox pump publishes from it. The component starts without NATS reachable.
+- **Departments**: assign everyone who must see a department's data (orders, opportunities, tasks scoped by `dept_path`) to that department, and whoever must see the whole organisation to its root department (`POST /api/admin/users/{sub}/department`). A person left without a department sees only their own rows in every department-scoped list, never everyone's. A new assignment reaches the token at the next refresh, at most `ACCESS_TOKEN_TTL_SECONDS` later.
 - **Identity** (`infra/iam-casdoor`, or any IAM serving a JWKS) reachable at `IAM_JWKS_URL`, and `AUTHZ_BUNDLE_URL` pointing at this component's own bundle: the admin API is protected by the same check as every other component, fed by its own bundle. For the first seconds after start, until its own first poll succeeds, the admin API answers `503`.
-- Demo data (optional): `make seed` in the component directory, once this component, Casdoor and `infra/iam-casdoor`'s seed users exist, grants the seed user `dev.superuser` every permission key, builds a small department tree and three job roles, and assigns the other seed users to them.
+- Demo data (optional): `make seed` in the component directory, once this component, Casdoor and `infra/iam-casdoor`'s seed users exist, grants the seed user `dev.superuser` every permission key and assigns them to the root department (head office), builds a small department tree (head office → East China, South China) and three job roles, and assigns the other seed users to them; `dev.finance.viewer` stays without a department on purpose, because finance scopes by legal entity, not by department.
 
 ## Dependencies
 
@@ -49,7 +50,7 @@ The bundle and the JWKS are fetched from the URLs in the configuration. Without 
 | `PG_SCHEMA` | Schema of all tables, the outbox and the migration state table (`schema_migrations_infra_authz`); default `infra_authz`. Write the literal anyway so every component's schema is visible in one place. |
 | `NATS_URL` | NATS server the outbox pump publishes to (`$var:NATS_URL`). |
 | `OTEL_BASE_URL` | OpenTelemetry collector base URL; empty (the default) exports nothing. |
-| `AUTHZ_BUNDLE_URL` | This component's own bundle, for example `http://infra-authz-2-0-0:8223/authz/bundle`: the admin API checks `infra.authz.admin` against it. Required. Every other component points at the same URL; change it everywhere when this component's version changes. |
+| `AUTHZ_BUNDLE_URL` | This component's own bundle, for example `http://infra-authz-2-0-1:8223/authz/bundle`: the admin API checks `infra.authz.admin` against it. Required. Every other component points at the same URL; change it everywhere when this component's version changes. |
 | `IAM_JWKS_URL` | URL of the JWKS used to verify user tokens locally, for example `http://infra-iam-casdoor-2-0-0:8200/.well-known/jwks.json`. Required. |
 | `PERMISSION_CATALOG` | The permission-key registry as text: tab-separated, one key per line, columns `key`, `title`, `type`, `owner_component`, `deprecated` (the last may be empty or missing); empty lines, lines starting with `#` and the header line are skipped. Write `file://<path to the registry>` so the value is always the file itself. Required, no default. A line with fewer than four columns or an empty key makes the whole synchronisation fail with the line number in the ERROR log `同步权限目录失败`; the table keeps what it had. |
 | `ACCESS_TOKEN_TTL_SECONDS` | Lifetime of the application access token the IAM adapter issues; default `600`. `stale_since` covers changes within twice this value, so it must equal the IAM adapter's token lifetime. |

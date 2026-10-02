@@ -31,6 +31,8 @@ This component is the bookkeeper of the permission system: the permission-key ca
 
 Terminal states: a `role_changes` row is final when written; an expired `user_roles` row stays in the table (who had what, when) but no longer counts. Migration `003` creates the key `infra.authz.admin`, the role `authz_admin` and the link between them; who receives that role is deployment-specific and done at start from `BOOTSTRAP_ADMIN_SUB`, because migrations must not depend on runtime configuration.
 
+**What the department path means, and what an empty one means.** A department's `dept_path` is its ancestor chain including itself, `/<id>/…/`; a top-level department is `/<id>/`. `ResolveClaims` returns the path of the person's one department, or an empty string when they have none, which is a legal state (a new account starts there). Empty means "no department", never "the root": the SDKs from v0.5.0 turn it into a sentinel that matches no real path, so the `org` dimension of every data scope matches nothing and an `owner OR org` condition leaves only the person's own rows. Taken literally, an empty prefix would match everything (`LIKE '' || '%'`, `strings.HasPrefix(x, "")`), and everyone without a department would see every row: a security default that fails open. Seeing the whole organisation is therefore an identity, not a privilege: the person is assigned to the root department, whose path is a prefix of every other. `/` is the explicit marker for the whole tree (several top-level trees at once); this component never issues it, since a single tree does not need it and the department table is a stopgap. No signed claim changes shape, so no contract change and no re-login: a token issued earlier with an empty path simply loses the `org` rows when the consumer runs the new SDK.
+
 **The catalogue comes from the registry itself.** `PERMISSION_CATALOG` is the content of `registry/permissions.tsv`, given as `file://registry/permissions.tsv`. The alternative — the assembly tooling generating a catalogue file — adds a "remember to regenerate after adding a key" step, and a missed regeneration means a new key silently never reaches the table. Reading the registry directly has no such step: after a key is appended, the next `brickkit up` recreates the component and it synchronises. Lines are tab-separated, at least four columns; the header, empty lines and `#` lines are skipped; a short line or an empty key fails the whole synchronisation with its line number. Rows with a non-empty `deprecated` are synchronised like the others, `deprecated` included: a retired key that some role still holds must keep resolving.
 
 ## Contract surface
@@ -91,6 +93,8 @@ Only the last two token lifetimes of `role_changes` take part in `stale_since`, 
 ## Data scopes
 
 None (`data_scopes: none`). Whoever may open the role management pages (`infra.authz.admin`) sees all roles, grants and departments: that is a function permission. Restricting it by department would be a data scope on the permission data itself, which nobody needs and which would make "who can grant what" depend on the organisation tree.
+
+It is, however, the source of the `dept_path` every other component's `org` dimension reads (see Owned data): a person without a department sees only their own rows there, and the whole organisation means the root department.
 
 ## Reference implementations
 

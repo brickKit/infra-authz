@@ -72,6 +72,7 @@ PG_HOST=localhost PG_PORT=5432 PG_DATABASE=brickkit_test_db PG_USER=infra_authz_
 | 每次授权都用 `time.Now()` 现算 `expires_at` | 每次重复授权都算一次变化，这个人一再变 stale | 幂等按值逐字比较；传业务上的到期日 |
 | 给 `PERMISSION_CATALOG` 登记表 TSV 以外的值（例如一行逗号分隔的条目） | 组件照常启动；日志里有 ERROR `同步权限目录失败`，带 `第 1 行只有 1 列`，新键永远进不了表 | 值就是登记表文件本身；写 `file://<路径>` |
 | 往 `dependencies.components` 加一条 | `make dag-check` 失败；有了这条边，authz 要等那个组件先起来，所有组件的受保护路由都跟着等 | 所有组件都只经配置依赖 authz |
+| 为了"让没分部门的人照样看全部"，让 `DeptPathFor` 对没有部门的人返回 `/` 或根部门的路径 | 每个新账号在有人给它分部门之前，都看得到所有部门的订单、商机与待办 | 空路径是合法的"没有部门"状态，SDK 把它限定为此人自己的行；要看全公司的人分到根部门（`scripts/seed.sh` 就是这样给 `dev.superuser` 分的） |
 
 ## 改代码前自查
 

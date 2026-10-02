@@ -72,6 +72,7 @@ The core test is `TestComputeBundle_专属角色也出现在roles里`: rerun it 
 | Compute `expires_at` with `time.Now()` on every grant call | Every repeated grant counts as a change and makes the person stale again | Idempotency compares the value literally; pass the business date |
 | Give `PERMISSION_CATALOG` anything but the registry TSV (for example one comma-separated line of entries) | The component starts; the log has ERROR `同步权限目录失败` with `第 1 行只有 1 列`, and new keys never reach the table | The value is the registry file itself; write `file://<path>` |
 | Add an entry to `dependencies.components` | `make dag-check` fails; with the edge, authz could not start before that component, and every protected route everywhere waits on it | Every component depends on authz through configuration only |
+| Make `DeptPathFor` return `/` or the root department's path for a person with no department, to "keep them seeing everything" | Every new account, before anyone assigns it a department, sees every department's orders, opportunities and tasks | An empty path is the legal "no department" state and the SDK scopes it to the person's own rows; whoever must see the whole organisation is assigned to the root department (`scripts/seed.sh` does this for `dev.superuser`) |
 
 ## Before changing code
 

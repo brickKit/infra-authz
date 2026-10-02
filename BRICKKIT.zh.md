@@ -11,7 +11,7 @@
 - 角色分配（`user_roles`，可带到期时间），以及让已签发 token 变 stale 的近期分配变更有界列表（`role_changes`）。
 - `GET /authz/bundle` 下发的 bundle：角色 → 权限键，加上 `stale_since`（sub → 两倍 access token 有效期之内此人角色最近一次变化的时间）。
 - 登录期 claims：`ResolveClaims` 给 IAM 适配层返回一个人的角色、部门路径与组织 ID。
-- 一张极简部门表（`departments`、`user_departments`），只为给 `ResolveClaims` 提供部门路径。
+- 一张极简部门表（`departments`、`user_departments`），只为给 `ResolveClaims` 提供部门路径。路径含祖先链与部门自己，形如 `/<id>/…/`：顶层部门是 `/<id>/`，绝不是 `/`。没有分到任何部门的人得到空串。SDK（`be-sdk-go`、`be-sdk-python`、`be-sdk-ts`）自 v0.5.0 起把空路径读作"没有部门"，不是整棵树：数据范围的 `org` 维一行都不命中，只剩此人自己的行。`/` 是整棵树的显式标记，本组件从不签发它。
 
 **不拥有**
 
@@ -28,8 +28,9 @@
 - **权限键登记表**：制表符分隔的文件，表头 `key title type owner_component deprecated`，以 `file://<路径>` 的形式交给 `PERMISSION_CATALOG`（BrickEnterprise 项目里是 `file://registry/permissions.tsv`）。生成部署文件时读取；新增一个键之后，下一次 `brickkit up` 会重建本组件，启动时同步进去。不需要再生成任何东西。
 - **第一个管理员**：把部署者的 `sub` 写进 `BOOTSTRAP_ADMIN_SUB`，启动时组件把 `authz_admin` 授给他（幂等）。留空时，在有人直接在数据库里授予 `authz_admin` 之前，没有人能用管理 API。
 - **NATS** 可经 `NATS_URL` 访问：Outbox 后台循环从这里推送。NATS 不可达时组件照常启动。
+- **部门**：要看某个部门数据（按 `dept_path` 限定的订单、商机、待办）的人都要分到那个部门，要看全公司的人分到根部门（`POST /api/admin/users/{sub}/department`）。没分部门的人在每个按部门限定的列表里只看得到自己的行，绝不是全部。新的分配在下一次刷新 token 时进入 token，最长滞后 `ACCESS_TOKEN_TTL_SECONDS`。
 - **身份**（`infra/iam-casdoor`，或任何提供 JWKS 的 IAM）可经 `IAM_JWKS_URL` 访问；`AUTHZ_BUNDLE_URL` 指向本组件自己的 bundle：管理 API 与所有组件用同一套判定保护，判定数据来自自己下发的 bundle。启动后最初几秒，在自己的第一次轮询成功之前，管理 API 回 `503`。
-- 演示数据（可选）：本组件、Casdoor 与 `infra/iam-casdoor` 的种子用户都就绪后，在组件目录 `make seed`：给种子用户 `dev.superuser` 授予全部权限键，建一棵小部门树和三个岗位角色，并把其余种子用户分到其中。
+- 演示数据（可选）：本组件、Casdoor 与 `infra/iam-casdoor` 的种子用户都就绪后，在组件目录 `make seed`：给种子用户 `dev.superuser` 授予全部权限键并把他分到根部门（总公司），建一棵小部门树（总公司 → 华东、华南）和三个岗位角色，并把其余种子用户分到其中；`dev.finance.viewer` 刻意不分部门，因为财务按法人限定，不按部门。
 
 ## 依赖说明
 
@@ -49,7 +50,7 @@ bundle 与 JWKS 从配置里的 URL 拉取。没有它们时每条受保护路�
 | `PG_SCHEMA` | 全部表、Outbox 与迁移状态表（`schema_migrations_infra_authz`）所在的 schema；默认 `infra_authz`。仍然写字面量，好让每个组件的 schema 在一处看得见。 |
 | `NATS_URL` | Outbox 后台循环推送到的 NATS（`$var:NATS_URL`）。 |
 | `OTEL_BASE_URL` | OpenTelemetry collector 基地址；为空（默认）时什么都不导出。 |
-| `AUTHZ_BUNDLE_URL` | 本组件自己的 bundle，例如 `http://infra-authz-2-0-0:8223/authz/bundle`：管理 API 按它判 `infra.authz.admin`。必填。所有组件都指向同一个 URL；本组件换版本时各处一起改。 |
+| `AUTHZ_BUNDLE_URL` | 本组件自己的 bundle，例如 `http://infra-authz-2-0-1:8223/authz/bundle`：管理 API 按它判 `infra.authz.admin`。必填。所有组件都指向同一个 URL；本组件换版本时各处一起改。 |
 | `IAM_JWKS_URL` | 本地验签用户 token 用的 JWKS 地址，例如 `http://infra-iam-casdoor-2-0-0:8200/.well-known/jwks.json`。必填。 |
 | `PERMISSION_CATALOG` | 权限键登记表的文本：制表符分隔，一行一个键，列为 `key`、`title`、`type`、`owner_component`、`deprecated`（最后一列可空或省略）；空行、`#` 开头的行与表头跳过。写成 `file://<登记表路径>`，值永远就是文件本身。必填，没有默认值。某一行少于四列或 key 为空时整次同步失败，ERROR 日志 `同步权限目录失败` 里带行号；表里保持原有内容。 |
 | `ACCESS_TOKEN_TTL_SECONDS` | IAM 适配层签发的应用 access token 有效期；默认 `600`。`stale_since` 覆盖两倍这个时长之内的变化，所以必须等于 IAM 适配层的 token 有效期。 |
