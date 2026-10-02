@@ -7,8 +7,7 @@ import (
 	besdk "github.com/brickKit/be-sdk-go"
 )
 
-// PermissionCatalogEntry 是权限键册的一条——be-ops 产出 9 经
-// config.permissionCatalog 灌进来的（设计书 §14.1.2）。
+// PermissionCatalogEntry 是权限键登记表（PERMISSION_CATALOG）的一行。
 type PermissionCatalogEntry struct {
 	Key            string
 	Title          string
@@ -17,25 +16,26 @@ type PermissionCatalogEntry struct {
 	Deprecated     string
 }
 
-// SyncPermissionCatalog 把目录里的每一条 upsert 进 permissions 表。
+// SyncPermissionCatalog 把目录里的每一条 upsert 进 permissions 表，
+// 包括 deprecated 列：登记表是唯一的真相源，表只是它的镜像。
 //
-// ⚠️ 只增不改的规矩在这里体现为"只 upsert，绝不删行"——即使这次传进来
-// 的目录里缺了某个曾经存在的 key（组件被临时移出装配），本函数也不会
-// 删除那一行：废弃走 deprecated 墓碑列，是人工决定，不是本函数的职责
-// （同 be-ops 的 registry/permissions.tsv 生成判据，registry/README.md）。
-// deprecated 列本函数从不触碰。
+// ⚠️ 只 upsert，绝不删行——即使这次传进来的目录里缺了某个曾经存在的 key
+// （组件被临时移出项目），本函数也不删那一行：已授给角色的键一删，
+// role_permissions 跟着级联删除，持有者静默失权。废弃一个键是在登记表里
+// 填 deprecated 列，键本身永远保留。
 func (r *Repo) SyncPermissionCatalog(ctx context.Context, entries []PermissionCatalogEntry) error {
 	return besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
 		for _, e := range entries {
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO permissions (key, title, type, owner_component)
-				VALUES ($1, $2, $3, $4)
+				INSERT INTO permissions (key, title, type, owner_component, deprecated)
+				VALUES ($1, $2, $3, $4, $5)
 				ON CONFLICT (key) DO UPDATE SET
 					title = EXCLUDED.title,
 					type = EXCLUDED.type,
 					owner_component = EXCLUDED.owner_component,
+					deprecated = EXCLUDED.deprecated,
 					updated_at = now()`,
-				e.Key, e.Title, e.Type, e.OwnerComponent); err != nil {
+				e.Key, e.Title, e.Type, e.OwnerComponent, e.Deprecated); err != nil {
 				return wrap("upsert permissions", err)
 			}
 		}

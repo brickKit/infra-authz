@@ -16,39 +16,54 @@ type PermissionCatalogEntry struct {
 	Deprecated     string
 }
 
-// ParsePermissionCatalog 解析 config.permissionCatalog 的编码格式
-// （阶段三 Task 4 设计决策，见 README「permissionCatalog 编码格式」）：
+// catalogMinColumns 是一行至少要有的列：key、title、type、owner_component。
+// 第 5 列 deprecated 可以没有（四列行）或为空。
+const catalogMinColumns = 4
+
+// ParsePermissionCatalog 解析 PERMISSION_CATALOG 的值：项目权限键登记表
+// （registry/permissions.tsv）的文件内容，部署时写成
+// file://registry/permissions.tsv。格式：
 //
-//	条目之间用逗号分隔，条目内部 4 个字段用竖线分隔：
-//	key|title|type|owner_component,key2|title2|type2|owner_component2
+//	key<TAB>title<TAB>type<TAB>owner_component<TAB>deprecated
 //
-// 选 `|` 做字段分隔符、`,` 做条目分隔符，是因为两者都不可能出现在
-// 权限键（`{domain}.{aggregate}.{action}` 格式，§3.7）或组件 ID
-// （`{domain}/{name}`）里，而中文标题几乎不会含有这两个符号——比
-// 传 JSON 更省字节，也不会撞上"平台把 YAML 数组渲染成 [a b c]"那条雷
-// （§14.1.2 明确要求逗号分隔字符串，不能是数组）。
+// 按行切；空行、# 开头的行和表头行（第一列是 key）跳过；每行至少 4 列，
+// 第 5 列 deprecated 可空。直接读登记表本身，而不是让别的工具生成一份
+// 副本：副本要"记得重新生成"，漏一次新键就永远进不了 permissions 表。
 //
-// 空字符串返回空切片、nil error——组件刚启动、还没有任何组件声明权限
-// 键是合法状态，不是错误。
+// deprecated 非空的行照样返回：已经授给角色的旧键必须仍能在 permissions
+// 表里解析到，废弃不是删除。
+//
+// 空字符串返回空切片、nil error（一个键都没有，不是格式错误）。
 func ParsePermissionCatalog(raw string) ([]PermissionCatalogEntry, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	rawEntries := strings.Split(raw, ",")
-	entries := make([]PermissionCatalogEntry, 0, len(rawEntries))
-	for i, re := range rawEntries {
-		fields := strings.Split(re, "|")
-		if len(fields) != 4 {
-			return nil, fmt.Errorf("permissionCatalog 第 %d 条格式不对（要 key|title|type|owner_component）：%q", i+1, re)
+	var entries []PermissionCatalogEntry
+	for i, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
-		key := strings.TrimSpace(fields[0])
+		cols := strings.Split(line, "\t")
+		if strings.TrimSpace(cols[0]) == "key" {
+			continue // 表头
+		}
+		lineNo := i + 1
+		if len(cols) < catalogMinColumns {
+			return nil, fmt.Errorf("PERMISSION_CATALOG 第 %d 行只有 %d 列（至少要 key、title、type、owner_component 四列，制表符分隔）：%q",
+				lineNo, len(cols), line)
+		}
+		key := strings.TrimSpace(cols[0])
 		if key == "" {
-			return nil, fmt.Errorf("permissionCatalog 第 %d 条的 key 不能为空：%q", i+1, re)
+			return nil, fmt.Errorf("PERMISSION_CATALOG 第 %d 行的 key 为空：%q", lineNo, line)
 		}
-		entries = append(entries, PermissionCatalogEntry{
-			Key: key, Title: fields[1], Type: fields[2], OwnerComponent: fields[3],
-		})
+		e := PermissionCatalogEntry{
+			Key:            key,
+			Title:          strings.TrimSpace(cols[1]),
+			Type:           strings.TrimSpace(cols[2]),
+			OwnerComponent: strings.TrimSpace(cols[3]),
+		}
+		if len(cols) > catalogMinColumns {
+			e.Deprecated = strings.TrimSpace(cols[4])
+		}
+		entries = append(entries, e)
 	}
 	return entries, nil
 }
