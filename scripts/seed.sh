@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # 灌本地开发用的种子授权：
 # ① 给万能测试用户（infra-iam-casdoor 的 scripts/seed.sh 建的那个）建一个
-#    持有全部权限键的角色（同 mdm-customer/mdm-product 的既有判据，总纲
-#    SOP-W-7：种子数据归各组件自己持有）——这一步直接写库，是刻意的，
-#    不是偷懒：这个开发环境没配 bootstrapAdminSub，没有任何账号能走合法
-#    的 REST admin API 去做首次授权，先有一个"已经有权限的账号"才能用
-#    它去调 admin API 授权别人，第一个账号只能绕开 API 直接写库。
-# ② 有了这个账号之后，②往后全部改走真实 REST admin API（不再直接写
-#    库）：建 2 个部门（华东/华南）+ 3 个权限子集角色（销售/仓管/财务
-#    只读），把 infra-iam-casdoor 建的另外 3 个测试用户分别归到对应
-#    部门+角色——这是总纲 SOP-W-7"数据权限维度要有真实存在感"这条
-#    判据的落地：种子数据不能只有一个全权限 admin 视角。
+#    持有全部权限键的角色（种子数据归各组件自己持有）——这一步直接写库，
+#    是刻意的：本地开发环境的 BOOTSTRAP_ADMIN_SUB 默认为空，还没有任何账号
+#    持有 infra.authz.admin，没人能走 REST admin API 做首次授权；先有一个
+#    "已经有权限的账号"，才能用它去调 admin API 授权别人。
+# ② 有了这个账号之后，②往后全部走真实 REST admin API（不再直接写库）：
+#    建 2 个部门（华东/华南）+ 3 个权限子集角色（销售/仓管/财务只读），
+#    把 infra-iam-casdoor 建的另外 3 个测试用户分别归到对应部门+角色——
+#    种子数据不能只有一个全权限 admin 视角，数据范围要有真实的部门与岗位
+#    才验得出来。
 #
 # 用法：make -C components/infra/authz seed——要求 Casdoor 已经在跑，且
 # infra-iam-casdoor 的种子用户已存在（本脚本会自己去 Casdoor 查，没有
@@ -33,9 +32,7 @@ check_healthz "$CASDOOR_URL/api/health" "Casdoor"
 check_healthz "$AUTHZ_REST/healthz" "infra-authz"
 
 # 独立向 Casdoor 查 sub，不依赖 infra-iam-casdoor 的 seed.sh 用任何方式
-# 传参给这里——两边各自都能单独跑通（同 mdm-customer/mdm-product 的
-# "组件自己的 make seed 单独跑就能拿到完整数据"判据），只是共享同一个
-# 约定好的用户名。sub_of 内部按需自动完成 Casdoor admin 登录。
+# 传参给这里——两边各自都能单独跑通，只是共享同一个约定好的用户名。sub_of 内部按需自动完成 Casdoor admin 登录。
 SEED_SUB="$(sub_of "$SEED_USER")"
 [ -n "$SEED_SUB" ] || die "Casdoor 里找不到 $SEED_USER——先 make -C components/infra/iam-casdoor seed"
 
@@ -170,7 +167,7 @@ FINANCE_SUB="$(sub_of dev.finance.viewer)"
 
 assign_dept "$SALES_SUB" "$EAST_DEPT_ID";       grant_role "$SALES_SUB" dev_sales_rep
 assign_dept "$WAREHOUSE_SUB" "$SOUTH_DEPT_ID";  grant_role "$WAREHOUSE_SUB" dev_warehouse_manager
-grant_role "$FINANCE_SUB" dev_finance_viewer   # 财务只读不归属具体部门——总纲判据里的"org 维"落在部门树上，财务视角本身是跨部门的
+grant_role "$FINANCE_SUB" dev_finance_viewer   # 财务只读不归属具体部门：部门维度落在部门树上，财务视角本身是跨部门的
 
 ok "dev.sales.east（sub=$SALES_SUB）→ 华东分部 + dev_sales_rep"
 ok "dev.warehouse.south（sub=$WAREHOUSE_SUB）→ 华南分部 + dev_warehouse_manager"
