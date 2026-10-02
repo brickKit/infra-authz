@@ -402,6 +402,54 @@ func TestSyncPermissionCatalog_重复同步刷新title(t *testing.T) {
 	}
 }
 
+func permissionDeprecated(t *testing.T, r *Repo, key string) string {
+	t.Helper()
+	var v string
+	if err := r.db.QueryRow(`SELECT deprecated FROM infra_authz.permissions WHERE key = $1`, key).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestSyncPermissionCatalog_废弃的键照样同步且已授出的授权仍在(t *testing.T) {
+	ctx := context.Background()
+	r := testRepo(t)
+	key := uniqueID("perm.retiring")
+	mustCreatePermission(t, r, key)
+	role := uniqueID("role")
+	mustCreateRole(t, r, role)
+	if err := r.GrantRolePermission(ctx, role, key); err != nil {
+		t.Fatal(err)
+	}
+
+	// 注册表把这个键标成废弃：键照样同步，deprecated 列跟着注册表走。
+	if err := r.SyncPermissionCatalog(ctx, []PermissionCatalogEntry{
+		{Key: key, Title: "测试权限", Type: "action", OwnerComponent: "test/fixture", Deprecated: "改用 x.y.z"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := permissionDeprecated(t, r, key); got != "改用 x.y.z" {
+		t.Fatalf("permissions.deprecated 应与注册表一致，得到 %q", got)
+	}
+	got, err := r.GetRole(ctx, role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.PermissionKeys) != 1 || got.PermissionKeys[0] != key {
+		t.Fatalf("废弃不是删除：已授给角色的旧键必须仍在，得到 %v", got.PermissionKeys)
+	}
+
+	// 注册表撤销废弃标记（deprecated 列清空）：表里也清空。
+	if err := r.SyncPermissionCatalog(ctx, []PermissionCatalogEntry{
+		{Key: key, Title: "测试权限", Type: "action", OwnerComponent: "test/fixture"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := permissionDeprecated(t, r, key); got != "" {
+		t.Fatalf("注册表的 deprecated 为空时表里也应为空，得到 %q", got)
+	}
+}
+
 // ── 角色 CRUD 的边界 ───────────────────────────────────────────────
 
 func TestCreateRole_u前缀被拒绝(t *testing.T) {

@@ -13,6 +13,7 @@ type PermissionCatalogEntry struct {
 	Title          string
 	Type           string
 	OwnerComponent string
+	Deprecated     string
 }
 
 // ParsePermissionCatalog 解析 config.permissionCatalog 的编码格式

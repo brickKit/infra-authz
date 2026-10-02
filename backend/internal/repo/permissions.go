@@ -14,6 +14,7 @@ type PermissionCatalogEntry struct {
 	Title          string
 	Type           string
 	OwnerComponent string
+	Deprecated     string
 }
 
 // SyncPermissionCatalog 把目录里的每一条 upsert 进 permissions 表。
