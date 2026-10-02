@@ -7,8 +7,8 @@ import (
 
 	authzv1 "github.com/brickKit/infra-authz/gen/infra/authz/v1"
 
-	"github.com/brickKit/infra-authz/backend/internal/repo"
-	"github.com/brickKit/infra-authz/backend/internal/service"
+	"github.com/brickKit/infra-authz/v2/backend/internal/repo"
+	"github.com/brickKit/infra-authz/v2/backend/internal/service"
 )
 
 type server struct {

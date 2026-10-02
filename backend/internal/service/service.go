@@ -11,7 +11,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/brickKit/infra-authz/backend/internal/repo"
+	"github.com/brickKit/infra-authz/v2/backend/internal/repo"
 )
 
 type Service struct {

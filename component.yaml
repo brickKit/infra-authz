@@ -2,35 +2,11 @@ apiVersion: brickkit/v1
 kind: Component
 
 metadata:
-  id: infra/authz                    # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
-  name: 权限账房
-  version: 1.0.8                     # 精确版本，不接受 ^ / ~ / latest
-                                     # v1.0.8：同 erp/inventory 这次改动，scripts/seed.sh 改成 source infra/scripts/lib/seed-net.sh（含 with_toolbox/get_app_jwt/sub_of），本组件特有的"先直接写库建首个全权限角色、再换 JWT 走 REST admin API"这个顺序保持不变，只是每一步换成共享库函数。理由同上。真机跑通 make seed（授权 dev.superuser 全权限角色+建部门树+3 个权限子集角色+4 个测试用户分别归属），无业务行为/契约变更。
-                                     # v1.0.7：同上，scripts/seed.sh 全部走 REST admin API，原来假设 CASDOOR/IAM/AUTHZ 三个地址都是宿主机 localhost 端口。改成工具箱容器 + ServiceName() 地址规则；过程中额外发现并修复一个真实权限问题——工具箱容器跑 curlimages/curl 默认非 root 用户，host 侧 mktemp 建出的 cookie jar 权限 0600 属主是宿主机用户，容器内 curl 读写不了，症状是 Casdoor 返回"Please login first"却看不出是权限问题——加 --user "$(id -u):$(id -g)" 修复，这条修复同步应用到全部 6 个受影响脚本。真机在 servedBy 部署下跑通 make seed（①直接写库授权、②-⑤全部走真实 REST admin API）。无业务行为/契约变更。
-                                     # v1.0.6：同 mdm/customer 这次改动，删掉 deployment.labels 的 prometheus.io/port，理由同上。无业务行为/契约变更。
-                                     # v1.0.5：gen/infra/authz 拆成独立嵌套 go module（module 边界切在 v1 目录上一级，因为 Go 模块路径禁止以字面量 /v1 结尾）——铁律六新增第二类白名单（生成物契约包，与 be-sdk-* 同类，设计书§13.3），让 infra-iam-casdoor 能直接 import 这份真身包，取代它自己 vendor 的一份逐字复制镜像。原因：两者都被分进了 go-infra 外壳，真机把二者真实模块合并进同一个进程做集成测试时（阶段四 Task 6）撞上了 vendored-contract 一旦调用方和被调方编译进同一个进程就会在 protobuf 全局注册表撞车的问题，这是 erp-sales 等五个组件之后第六次真实撞到同一类问题（阶段四调研记录 04 §13）。本仓库自己 standalone 构建/测试用本地 replace 完全不受影响， import-scan/单测全绿。无业务行为/契约变更。
-                                      # v1.0.4：make seed 从"只给一个全权限 admin 账号"扩成
-                                      # 真实的多角色权限体系样板——① 直接写库给 dev.superuser
-                                      # 建全权限角色（唯一保留的首次自举步骤，无合法 REST
-                                      # admin API 可用前必须有）；② 换其真实 JWT 后全部改走
-                                      # 真实 REST admin API：建 2 个部门（总公司→华东/华南
-                                      # 分部）+ 3 个权限子集角色（销售代表/仓管/财务只读）+
-                                      # 把 infra-iam-casdoor 建的另外 3 个测试用户分别归到
-                                      # 对应部门+角色。这是总纲 SOP-W-7"数据权限维度要有真实
-                                      # 存在感"这条判据的落地——种子数据不能只有一个全权限
-                                      # admin 视角。seed-clean.sh 同步扩到撤销全部测试角色+
-                                      # 部门树（部门与角色之间无 ON DELETE CASCADE，按
-                                      # user_departments→子部门→父部门的顺序删，避免撞外键）。
-                                      # 无行为/契约变更。
-                                      # v1.0.3：新增 scripts/seed.sh + make seed/seed-clean——
-                                      # 种子授权（给测试用户建角色+灌全部权限键）归本组件自己
-                                      # 持有（总纲 SOP-W-7），自己独立向 Casdoor 查 sub，不吃
-                                      # infra-iam-casdoor 传参，两边各自 make seed 都能单独跑
-                                      # 通；根 infra/seed-data/seed.sh 改成调用它。纯本地开发
-                                      # 工具，无行为/契约变更。
-                                      # v1.0.1：纯 Makefile 门禁加固（check-version 新增
-                                      # deployment.image 一致性判据），无业务逻辑改动
-  description: 权限键册、角色模型（纯并集）、GET /authz/bundle 策略下发、登录期 claims 计算——权限体系里唯一持久化状态的组件
+  id: infra/authz
+  name: Authorization
+  version: 2.0.0
+  description: Permission key catalogue, roles as plain unions, the policy bundle served at /authz/bundle, and login-time claims.
+  repository: https://github.com/brickKit/infra-authz
   license: Apache-2.0
   vendor: brickKit
 
@@ -39,76 +15,54 @@ tags: [infra, authz, rbac]
 artifacts:
   - type: api-contract
     format: protobuf
-    files:
-      - contracts/infra/authz/v1/authz.proto
-      - contracts/events/authz.events.json
+    files: [contracts/infra/authz/v1/authz.proto, contracts/events/authz.events.json]
   - type: api-contract
     format: openapi
     files: [contracts/authz.openapi.yaml]
-  - type: metadata                   # ← assembly.yaml 靠这一条随组件分发（§3.5）
+  - type: metadata
     files: [assembly.yaml]
 
 dependencies:
-  components: []                     # ⚠️ 强依赖为零；mdm/org 是弱依赖但阶段五才存在，
-                                      # 现在不写（决策：没有已写好的仓库就不建依赖边）
-  resources:
-    # ⚠️ engine 逐字参与匹配（设计书 §2.7.3.1）：这里写的词必须与
-    #    brickkit.yaml 的 resources[].engine 完全相同，平台不认别名。
-    - { kind: database, engine: postgresql }
-    - { kind: mq,       engine: nats }        # 发 infra.authz.role.changed.v1 等旁路审计事件
+  components: []
 
 configSchema:
   type: object
   properties:
-    pgSchema:                        # ⚠️ 不能叫 databaseSchema，DATABASE_ 是保留前缀
-      type: string
-      default: infra_authz
-    iamJwksUrl:                      # 自己的管理 API 也要验 JWT（决策：自吃自己的 bundle）
-      type: string
-    authzBundleUrl:                  # ⚠️ 指向自己——本组件的管理 API 用同一套
-                                      # besdk.RequirePermission 机制保护，需要轮询
-                                      # 自己的 /authz/bundle（Task 4 设计决策，见 README）
-      type: string
-    otelBaseUrl:                     # ⚠️ 不能叫 otelEndpoint，*_ENDPOINT 是保留后缀
-      type: string
-      default: ""                    # 空 → Blackhole Exporter，零成本（§7.5）
-    permissionCatalog:                # be-ops 产出 9 经这里灌入（§14.1.2）。
-      type: string                   # 逗号分隔条目，条目内 | 分隔 key|title|type|owner_component
-      default: ""                    # 空 = 还没有任何组件声明权限键，属于合法的启动态
-    accessTokenTtlSeconds:            # stale_since 窗口 = 2× 这个值（§14.1.6）。
-      type: integer                  # 与 infra-iam-casdoor 签发 access token 的 TTL 必须一致，
-      default: 600                   # 否则窗口算错——已定值 10 分钟（design 计划 §9 第 3 条）
-    defaultOrgId:                     # 阶段三只有一个默认法人/组织（同 erp-finance 的既有先例）
-      type: string                   # ResolveClaims 对所有用户返回同一个 org_id，阶段五多组织时再变
-      default: "1"
-    bootstrapAdminSub:                # 首个管理员的 sub。非空时 Start() 幂等地把 authz_admin
-      type: string                   # 角色授予这个 sub——解决"第一个管理员怎么来"的鸡生蛋问题
-      default: ""                    # （见 README「自举」一节）。留空表示先不自举任何人
+    PG_HOST: {type: string}
+    PG_PORT: {type: string, default: "5432"}
+    PG_DATABASE: {type: string}
+    PG_USER: {type: string}
+    PG_PASSWORD: {type: string, secret: true}
+    PG_SCHEMA: {type: string, default: infra_authz}
+    NATS_URL: {type: string}
+    OTEL_BASE_URL: {type: string, default: ""}
+    AUTHZ_BUNDLE_URL: {type: string}
+    IAM_JWKS_URL: {type: string}
+    PERMISSION_CATALOG: {type: string}
+    ACCESS_TOKEN_TTL_SECONDS: {type: integer, default: 600}
+    DEFAULT_ORG_ID: {type: string, default: "1"}
+    BOOTSTRAP_ADMIN_SUB: {type: string, default: ""}
+  required: [PG_HOST, PG_DATABASE, PG_USER, PG_PASSWORD, NATS_URL, AUTHZ_BUNDLE_URL, IAM_JWKS_URL, PERMISSION_CATALOG]
 
 deployment:
   type: container
-  image: brickenterprise/infra-authz:1.0.8
-  port: 8223                         # 端口册 registry/ports.tsv
+  build: {context: ., dockerfile: Dockerfile}
+  port: 8223
   extraPorts:
-    - { name: grpc, port: 9223 }     # → INFRA_AUTHZ_GRPC_ENDPOINT（值仍以 http:// 开头）
-  labels:                            # 平台只搬运，不解释键值。值必须是字符串
+    - {name: grpc, port: 9223}
+  labels:
     prometheus.io/scrape: "true"
-    # prometheus.io/port 原来写在这里——阶段四附加 Task 0.1 真机验证
-    # servedBy 时发现这个标签会跟同外壳其它成员的 prometheus.io/port 撞车
-    # 报错（每个组件的值天然不同，servedBy 的 labels 合并规则没有像 env
-    # 变量合并那样排除这类"语义上必然因组件而异"的标签，已反馈给 brickKit，
-    # 见装配仓库 docs/dev/brickKit反馈-servedBy的labels合并漏了排除规则.md）。
-    # 在 brickKit 修复或给出结论之前，暂时从这里删掉，只在合并后的外壳
-    # 自己的条目上保留一份——跟"合并后指标只能走一个共享抓取端口"这个
-    # 事实本来就一致，不是单纯绕过。
-    prometheus.io/path: "/metrics"
+    prometheus.io/path: /metrics
   resources:
-    requests: { cpu: "150m", memory: "192Mi" }
+    requests: {cpu: 150m, memory: 192Mi}
 
 migration:
-  command: ["./migrate", "up"]
+  command: [./migrate, up]
 
 healthCheck:
   type: http
-  path: /healthz                     # ⚠️ 只查本进程存活，严禁查库或查依赖组件（§12.3.6）
-  # startPeriodSeconds 不写：默认就是 60，Go 组件够用（§12.3.5）
+  path: /healthz
+
+local:
+  language: go
+  runCommand: [go, run, ./backend/cmd/server]

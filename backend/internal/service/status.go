@@ -3,7 +3,7 @@ package service
 import (
 	"errors"
 
-	"github.com/brickKit/infra-authz/backend/internal/repo"
+	"github.com/brickKit/infra-authz/v2/backend/internal/repo"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

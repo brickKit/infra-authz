@@ -14,8 +14,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	besdk "github.com/brickKit/be-sdk-go"
-	"github.com/brickKit/infra-authz/backend/internal/repo"
-	"github.com/brickKit/infra-authz/backend/internal/service"
+	"github.com/brickKit/infra-authz/v2/backend/internal/repo"
+	"github.com/brickKit/infra-authz/v2/backend/internal/service"
 )
 
 // RegisterRoutes 挂载全部路由。

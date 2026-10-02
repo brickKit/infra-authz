@@ -12,24 +12,23 @@ import (
 	authzv1 "github.com/brickKit/infra-authz/gen/infra/authz/v1"
 	"google.golang.org/grpc"
 
-	grpcapi "github.com/brickKit/infra-authz/backend/internal/grpc"
-	httpapi "github.com/brickKit/infra-authz/backend/internal/http"
-	"github.com/brickKit/infra-authz/backend/internal/partition"
-	"github.com/brickKit/infra-authz/backend/internal/repo"
-	"github.com/brickKit/infra-authz/backend/internal/service"
-	"github.com/brickKit/infra-authz/migrations"
+	grpcapi "github.com/brickKit/infra-authz/v2/backend/internal/grpc"
+	httpapi "github.com/brickKit/infra-authz/v2/backend/internal/http"
+	"github.com/brickKit/infra-authz/v2/backend/internal/partition"
+	"github.com/brickKit/infra-authz/v2/backend/internal/repo"
+	"github.com/brickKit/infra-authz/v2/backend/internal/service"
 )
 
 // New 构造 infra-authz 模块。签名一个字都不许改（§12.5.1）——62 个
 // 组件都是这一个签名，外壳启动器与 be-ops 产出 4 都按它生成。
 func New(ctx context.Context, rt *besdk.Runtime) (*besdk.Module, error) {
 	// ⚠️ 配置只从 rt.Config 来，模块里零 os.Getenv（§12.5.3、决策 110）。
-	schema := rt.Config.StringOr("pgSchema", "infra_authz")
+	schema := rt.Config.StringOr("PG_SCHEMA", "infra_authz")
 	role := schema + "_rw"
-	accessTokenTTL := time.Duration(rt.Config.IntOr("accessTokenTtlSeconds", 600)) * time.Second
-	defaultOrgID := rt.Config.StringOr("defaultOrgId", "1")
-	permissionCatalog := rt.Config.StringOr("permissionCatalog", "")
-	bootstrapAdminSub := rt.Config.StringOr("bootstrapAdminSub", "")
+	accessTokenTTL := time.Duration(rt.Config.IntOr("ACCESS_TOKEN_TTL_SECONDS", 600)) * time.Second
+	defaultOrgID := rt.Config.StringOr("DEFAULT_ORG_ID", "1")
+	permissionCatalog := rt.Config.StringOr("PERMISSION_CATALOG", "")
+	bootstrapAdminSub := rt.Config.StringOr("BOOTSTRAP_ADMIN_SUB", "")
 
 	// ⚠️ 池从 rt.DB 来，不许自己 sql.Open（§13.3 铁律二）。
 	r := repo.New(rt.DB, role, schema)
@@ -48,8 +47,6 @@ func New(ctx context.Context, rt *besdk.Runtime) (*besdk.Module, error) {
 		RegisterGRPC: func(gs *grpc.Server) {
 			authzv1.RegisterAuthzServiceServer(gs, grpcapi.New(svc))
 		},
-
-		Migrations: migrations.FS, // 合并态由外壳按拓扑顺序跑（§13.3 铁律五）
 
 		// Start 先做两件一次性的事（目录同步 + 自举管理员），再起两个
 		// 并发的后台循环（Outbox 推送 + 分区维护）。一次性的事失败只
