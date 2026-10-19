@@ -26,7 +26,7 @@
 
 - 数据库：自己的 schema、运行角色与属主角色（装配项目注册表的 `infra_authz`）。
 - `AUTHZ_INSTANCE`：安装时生成一个 UUID，随部署的运行档案保存，以后不再改变。本组件发现库里记的实例与配置不同时，拒绝启动。
-- `AUTHZ_REGISTRY`（通常是 `AUTHZ_REGISTRY_FILE`）：
+- `AUTHZ_REGISTRY`（通常写成 `file://`，或用 `AUTHZ_REGISTRY_FILE`）：
   - 资源类型与权限键的属主，由装配从注册表生成；
   - 格式是 TSV，三列为 `kind`、`key`、`owner_component`，`kind` 取 `resource_type` 或 `permission`；
   - 本组件自己的键也要在里面。
