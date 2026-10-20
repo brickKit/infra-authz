@@ -5,7 +5,7 @@ package member
 // The member against PostgreSQL, over its real surfaces: a component's definitions submitted over mTLS, the views
 // it issues opened by the SDK's own client, changes at the effect point by users with tokens of the test deployment
 // (be-sdk-go's sectest), and the member guarding its own user surface with its own view. Needs AUTHZ_IT_PG_PASSWORD
-// (the postgres superuser of be-postgres); missing, it fails. The member listens on 18223 (user) and 9223 (system).
+// (the postgres superuser of be-postgres); missing, it fails. The member listens on 28223 (user) and 9223 (system).
 // Run: go test -tags integration ./member/
 
 import (
@@ -13,9 +13,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +34,7 @@ import (
 )
 
 const (
-	itPort   = "18223"
+	itPort   = "28223"
 	itBase   = "http://localhost:" + itPort
 	itSystem = "localhost:9223"
 	itSchema = "authz_it"
@@ -76,6 +78,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 
 	w := sectest.New(t)
+	portFree(t, itPort, itSystem)
 	env := w.Env(t, ID)
 	for k, v := range map[string]string{"COMPONENT_ID": ID, "COMPONENT_VERSION": Version, "PORT": itPort, "STOP_DRAIN_DELAY": "50ms",
 		"PG_HOST": "localhost", "PG_DATABASE": itDB, "PG_USER": "postgres", "PG_PASSWORD": pgPassword, "PG_SCHEMA": itSchema,
@@ -264,4 +267,17 @@ func waitForView(t *testing.T, w *sectest.World, who string) {
 		code, _ := call(t, w, who, "GET", "/api/authz/records?type=grant", nil)
 		return code == 200
 	}, 10*time.Second, 200*time.Millisecond)
+}
+
+// portFree fails at once when a port the member needs is taken: a running cell (host ports 18xxx) or another member
+// would answer in its place, and the test would assert against another process.
+func portFree(t *testing.T, addrs ...string) {
+	for _, a := range addrs {
+		if !strings.Contains(a, ":") {
+			a = "localhost:" + a
+		}
+		ln, err := net.Listen("tcp", a)
+		require.NoError(t, err, "port %s is taken: is a cell or another member running?", a)
+		_ = ln.Close()
+	}
 }
