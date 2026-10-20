@@ -12,6 +12,7 @@
 | `member/view.go` | `ViewService.Verify`：按已提交的记录重新计算一个组件的分片 |
 | `member/effect.go` | 生效点：变更键、管理资格、包含证明、最后管理员、推进修订、审计 |
 | `member/security.go` | 记录的字段、逐维的包含规则 |
+| `cmd/seed`（`make seed`） | 种子：给单元管理员授予本组件自己的操作；角色、授予与管理单元由定义那些操作的组件的种子建立 |
 | `member/migrations/` | 表 |
 
 ## 构建与测试
