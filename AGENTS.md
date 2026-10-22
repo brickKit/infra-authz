@@ -1,24 +1,25 @@
 # infra/authz
 
-授权成员的代码。先读 `BRICKKIT.md`；依据是装配项目 be-assembly-standard 的安全 03（视图与核验）、04（管理上限）、07（包含证明）、08（生效点与记录）、09a（记录与错误），以及 `contract-infra-authz` 的 README（成员的义务）。
+授权成员的代码。用法与边界在 `BRICKKIT.md`，为什么这样设计（术语、数据、规则、实现状态、未决问题）在 [docs/design.md](docs/design.md)；依据是装配项目 be-assembly-standard 的安全 03（视图与核验）、04（管理上限）、07（包含证明）、08（生效点与记录）、09a（记录与错误），以及 `contract-infra-authz` 的 README（成员的义务）。
 
 ## 代码地图
 
 | 文件 | 内容 |
 | --- | --- |
-| `member/definition.go` | 组件定义、配置键、本组件自己的资源与操作 |
-| `member/module.go` | 系统面与用户面的注册、启动时的状态行与安装认领 |
-| `member/submit.go` | `DefinitionService.Submit`：注册表、逐份校验、版本与幂等 |
-| `member/view.go` | `ViewService.Verify`：按已提交的记录重新计算一个组件的分片 |
-| `member/effect.go` | 生效点：变更键、管理资格、包含证明、最后管理员、推进修订、审计 |
-| `member/security.go` | 记录的字段、逐维的包含规则 |
+| `authz/definition.go` | 组件定义、配置键、本组件自己的资源与操作 |
+| `authz/module.go` | 系统面与用户面的注册、启动时的状态行与安装认领 |
+| `authz/submit.go` | `DefinitionService.Submit`：注册表、逐份校验、版本与幂等 |
+| `authz/view.go` | `ViewService.Verify`：按已提交的记录重新计算一个组件的分片 |
+| `authz/effect.go` | 生效点：变更键、管理资格、包含证明、最后管理员、推进修订、审计 |
+| `authz/security.go` | 记录的字段、逐维的包含规则 |
 | `cmd/seed`（`make seed`） | 种子：给单元管理员授予本组件自己的操作；角色、授予与管理单元由定义那些操作的组件的种子建立 |
-| `member/migrations/` | 表 |
+| `authz/migrations/` | 表 |
+| `docs/design.md` | 设计：术语、数据、规则、命令、实现状态、未决问题 |
 
 ## 构建与测试
 
 - `go test ./...`：单元测试，覆盖包含规则的每一行、注册表、提交的交叉检查与合并安全。
-- `go test -tags integration ./member/`：
+- `go test -tags integration ./authz/`：
   - 依赖：本机的 PostgreSQL（环境变量 `AUTHZ_IT_PG_PASSWORD`），以及 be-sdk-go 的 `sectest` 测试部署；
   - 覆盖：提交的规则；视图经 SDK 自己的客户端打开；越权授出被拒；撤权在下一次核验里消失；变更键；最后管理员；审计。
 - `brickkit lint`

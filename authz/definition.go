@@ -3,7 +3,7 @@
 // the effect point, and answers view verifications from the committed records (security 03, 08, 09a). Step 5 of the
 // representative deployment experiment: confirmations, the strict path, member switching, sharing, delegation and
 // appointment-bound grants are not here; what needs them answers CAPABILITY_UNSUPPORTED.
-package member
+package authz
 
 import (
 	"embed"
@@ -18,7 +18,7 @@ import (
 // Identity of the component.
 const (
 	ID      = "infra/authz"
-	Version = "3.0.3"
+	Version = "3.0.4"
 )
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.

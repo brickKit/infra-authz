@@ -1,4 +1,4 @@
-package member
+package authz
 
 import (
 	"testing"

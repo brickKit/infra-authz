@@ -1,6 +1,6 @@
 //go:build integration
 
-package member
+package authz
 
 // The member against PostgreSQL, over its real surfaces: a component's definitions submitted over mTLS, the views
 // it issues opened by the SDK's own client, changes at the effect point by users with tokens of the test deployment
