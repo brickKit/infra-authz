@@ -54,7 +54,14 @@ const registryTSV = "kind\tkey\towner_component\n" +
 	"permission\tinfra.authz.security_record.read\tinfra/authz\npermission\tinfra.authz.security_record.change\tinfra/authz\n" +
 	"permission\tinfra.authz.system.read\tinfra/authz\npermission\tinfra.authz.system.verify\tinfra/authz\n" +
 	"permission\tinfra.authz.system.submit\tinfra/authz\n" +
-	"resource_type\tdemo.order\tdemo/orders\npermission\tdemo.order.read\tdemo/orders\n"
+	"resource_type\tdemo.order\tdemo/orders\npermission\tdemo.order.read\tdemo/orders\n" +
+	"resource_type\tdemo.invoice\tdemo/invoices\npermission\tdemo.invoice.read\tdemo/invoices\n"
+
+// invoices submits its definitions late in the test: a grant naming its resource type waits for them (D77).
+var invoices = &sdkauthz.Definitions{Component: "demo/invoices",
+	Resources: []sdkauthz.Resource{{Type: "demo.invoice", ViewOperation: "demo.invoice.read",
+		Dimensions: map[string]sdkauthz.Dimension{}, Fields: map[string]sdkauthz.Field{"id": {Class: sdkauthz.Ordinary}}}},
+	Operations: []sdkauthz.Operation{{Key: "demo.invoice.read", ResourceType: "demo.invoice", Purpose: "read", RiskClass: "low"}}}
 
 func region(v ...string) map[string]sdkauthz.Atom {
 	return map[string]sdkauthz.Atom{"region": {Kind: "in", Values: v}}
@@ -154,6 +161,18 @@ func TestMemberEndToEnd(t *testing.T) {
 	units := listRecords(t, w, sectest.Alice, "management_unit")
 	require.Len(t, units, 1)
 	root := units[0]["id"].(string)
+
+	// a grant naming a resource type whose definitions have not arrived: retryable, and the change key stays free, so
+	// the same key takes effect once they are accepted (D77; a member is ready before its definitions are accepted)
+	invoiceGrant := map[string]any{"change_key": "p1", "action": "grant.create", "unit": root, "grantee": sectest.Bob,
+		"segments": []sdkauthz.Segment{{ResourceType: "demo.invoice", Operation: "demo.invoice.read", Atoms: map[string]sdkauthz.Atom{},
+			ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}}}
+	pending := submitChange(t, w, sectest.Alice, invoiceGrant, 503)
+	assert.Equal(t, "DEFINITION_PENDING", pending["reason"])
+	submitChange(t, w, sectest.Alice, invoiceGrant, 503) // not bound: checked again
+	require.NoError(t, invoices.Validate())
+	require.NoError(t, invoices.Submit(ctx, authzv3.NewDefinitionServiceClient(dial(t, w, "demo/invoices")), w.Deployment, "3.0.0"))
+	submitChange(t, w, sectest.Alice, invoiceGrant, 200)
 	east := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "u1", "action": "unit.create", "unit": root, "name": "east",
 		"managed_scope": []sdkauthz.Segment{orderSeg(region("east"))}, "grantable_operations": []string{"demo.order.read"}}, 200)
 	eastID := east["record"].(string)

@@ -101,7 +101,8 @@ func (m *Module) apply(ctx context.Context, requester string, c change) (result,
 	if errors.As(err, &rej) {
 		res = rej.result
 		res.ChangeKey = c.ChangeKey
-		if rej.Reason != errs.ReasonChangeKeyConflict { // a final rejection binds the key (security 08); a conflict does not
+		// a final rejection binds the key (security 08); a conflict and a definition still on its way do not (D77)
+		if rej.Reason != errs.ReasonChangeKeyConflict && rej.Reason != errs.ReasonDefinitionPending {
 			out, _ := json.Marshal(res)
 			bindErr := m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
 				_, err := tx.Exec(ctx, `INSERT INTO authz_change (requested_by, change_key, content_digest, result)
@@ -282,7 +283,8 @@ func (m *Module) within(ctx context.Context, tx db.Tx, segs []sdkauthz.Segment, 
 			return err
 		}
 		if r == nil {
-			return reject(errs.ReasonRequestInvalid, "resource type "+s.ResourceType+" is not defined")
+			// its component is ready before its definitions are accepted (P8.24): retryable, the key stays free (D77)
+			return reject(errs.ReasonDefinitionPending, "resource type "+s.ResourceType+" is not defined yet")
 		}
 		if err := s.Check(r); err != nil {
 			return reject(errs.ReasonRequestInvalid, err.Error())
