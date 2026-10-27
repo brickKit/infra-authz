@@ -283,7 +283,16 @@ func (m *Module) within(ctx context.Context, tx db.Tx, segs []sdkauthz.Segment, 
 			return err
 		}
 		if r == nil {
-			// its component is ready before its definitions are accepted (P8.24): retryable, the key stays free (D77)
+			reg, err := m.registry()
+			if err != nil {
+				return err
+			}
+			if reg.owner("resource_type", s.ResourceType) == "" {
+				// no component of this deployment owns it (a typo, a component not deployed): nothing is on its way,
+				// so a final rejection that binds the key (D77)
+				return reject(errs.ReasonRequestInvalid, "resource type "+s.ResourceType+" is not registered in this deployment")
+			}
+			// its owner is ready before its definitions are accepted (P8.24): retryable, the key stays free (D77)
 			return reject(errs.ReasonDefinitionPending, "resource type "+s.ResourceType+" is not defined yet")
 		}
 		if err := s.Check(r); err != nil {

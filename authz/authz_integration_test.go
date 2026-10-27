@@ -167,6 +167,17 @@ func TestMemberEndToEnd(t *testing.T) {
 	invoiceGrant := map[string]any{"change_key": "p1", "action": "grant.create", "unit": root, "grantee": sectest.Bob,
 		"segments": []sdkauthz.Segment{{ResourceType: "demo.invoice", Operation: "demo.invoice.read", Atoms: map[string]sdkauthz.Atom{},
 			ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}}}
+	// a resource type the registry does not name is no definition on its way (a typo, a component this deployment
+	// does not run): a final rejection, which binds the change key (D77)
+	ghost := map[string]any{"change_key": "p0", "action": "grant.create", "unit": root, "grantee": sectest.Bob,
+		"segments": []sdkauthz.Segment{{ResourceType: "demo.ghost", Operation: "demo.ghost.read", Atoms: map[string]sdkauthz.Atom{},
+			ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}}}
+	refused := submitChange(t, w, sectest.Alice, ghost, 400)
+	assert.Equal(t, "REQUEST_INVALID", refused["reason"])
+	assert.Contains(t, refused["detail"], "not registered")
+	ghostAgain := submitChange(t, w, sectest.Alice, ghost, 400)
+	assert.Equal(t, refused["detail"], ghostAgain["detail"], "the key is bound: the same answer")
+
 	pending := submitChange(t, w, sectest.Alice, invoiceGrant, 503)
 	assert.Equal(t, "DEFINITION_PENDING", pending["reason"])
 	submitChange(t, w, sectest.Alice, invoiceGrant, 503) // not bound: checked again

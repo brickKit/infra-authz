@@ -4,7 +4,7 @@ kind: Component
 metadata:
   id: infra/authz
   name: Authorization
-  version: 3.0.9
+  version: 3.0.10
   description: "The authorization member: definitions submitted by every component, security records changed only at the effect point (containment within the grantor's limit, the last admin), and views verified from the committed records"
   repository: https://github.com/brickKit/infra-authz
 
