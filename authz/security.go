@@ -47,10 +47,11 @@ type record struct {
 	Body     json.RawMessage
 }
 
-// active reads the active records of some types.
+// active (past valid_until a record gives no access at once: the closure job ends it later, security 08) reads the active records of some types.
 func active(ctx context.Context, tx db.Tx, types ...string) ([]record, error) {
 	rows, err := tx.Query(ctx, `SELECT id::text, record_type, revision, body FROM authz_record
-		WHERE state = 'active' AND record_type = ANY($1) ORDER BY created_at, id`, types)
+		WHERE state = 'active' AND record_type = ANY($1) AND (valid_from IS NULL OR valid_from <= now())
+			AND (valid_until IS NULL OR valid_until > now()) ORDER BY created_at, id`, types)
 	if err != nil {
 		return nil, err
 	}

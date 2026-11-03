@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/brickKit/be-sdk-go/v3/projection"
 	"github.com/brickKit/be-sdk-go/v3/runtime"
 	authzv3 "github.com/brickKit/contract-infra-authz/v3/gen/go/be/authz/v3"
+	"github.com/jackc/pgx/v5"
 )
 
 // Module is the authorization member.
@@ -100,6 +102,7 @@ func (m *Module) Services(s *grpcx.Services) error {
 // Routes registers the user surface: the effect point and the records, guarded by this member's own view.
 func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/changes", Operation: OpChange, Handle: m.changeHTTP})
+	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/changes/:key", Operation: OpChange, Handle: m.changeByKey})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/records", Operation: OpRead, Handle: m.recordsHTTP})
 	return nil
 }
@@ -111,16 +114,52 @@ func (m *Module) changeHTTP(c *httpx.Context) error {
 		return err
 	}
 	u, _ := identity.UserFrom(ctx)
-	var in change
+	var in request
 	if err := c.BindJSON(&in); err != nil {
 		return err
 	}
-	res, err := m.apply(ctx, u.Subject, in)
+	res, err := m.change(ctx, u.Subject, in)
 	if err != nil {
 		return err
 	}
-	if res.Outcome == "rejected" {
+	return answer(c, res)
+}
+
+// answer is a change result on the user surface: a rejection as its error; processing, awaiting confirmation and
+// scheduled are accepted for later (202, security 09a); applied and a kept hold are done (200).
+func answer(c *httpx.Context, res changeResult) error {
+	switch res.Outcome {
+	case "rejected":
 		return errs.New(res.Reason, res.Detail).With("change_key", res.ChangeKey)
+	case "processing", "awaiting_confirmation", "scheduled":
+		return c.JSON(202, res)
+	}
+	return c.JSON(200, res)
+}
+
+// changeByKey answers a query by change key (security 08: when a result is unknown, ask, do not submit again).
+func (m *Module) changeByKey(c *httpx.Context) error {
+	s, _ := sdkauthz.From(c.Ctx())
+	ctx, _, err := s.Check(c.Ctx(), OpChange, sdkauthz.Facts{})
+	if err != nil {
+		return err
+	}
+	u, _ := identity.UserFrom(ctx)
+	key := c.Param("key")
+	var bound []byte
+	err = m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
+		return tx.QueryRow(ctx, "SELECT result FROM authz_change WHERE requested_by = $1 AND change_key = $2",
+			u.Subject, key).Scan(&bound)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c.JSON(200, changeResult{ChangeKey: key, Outcome: "unbound"})
+	}
+	if err != nil {
+		return err
+	}
+	var res changeResult
+	if err := json.Unmarshal(bound, &res); err != nil {
+		return err
 	}
 	return c.JSON(200, res)
 }

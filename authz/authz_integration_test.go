@@ -178,14 +178,12 @@ func TestMemberEndToEnd(t *testing.T) {
 
 	// a grant naming a resource type whose definitions have not arrived: retryable, and the change key stays free, so
 	// the same key takes effect once they are accepted (D77; a member is ready before its definitions are accepted)
-	invoiceGrant := map[string]any{"change_key": "p1", "action": "grant.create", "unit": root, "grantee": sectest.Bob,
-		"segments": []sdkauthz.Segment{{ResourceType: "demo.invoice", Operation: "demo.invoice.read", Atoms: map[string]sdkauthz.Atom{},
-			ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}}}
+	invoiceGrant := grantReq("p1", root, sectest.Bob, []sdkauthz.Segment{{ResourceType: "demo.invoice", Operation: "demo.invoice.read", Atoms: map[string]sdkauthz.Atom{},
+		ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}})
 	// a resource type the registry does not name is no definition on its way (a typo, a component this deployment
 	// does not run): a final rejection, which binds the change key (D77)
-	ghost := map[string]any{"change_key": "p0", "action": "grant.create", "unit": root, "grantee": sectest.Bob,
-		"segments": []sdkauthz.Segment{{ResourceType: "demo.ghost", Operation: "demo.ghost.read", Atoms: map[string]sdkauthz.Atom{},
-			ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}}}
+	ghost := grantReq("p0", root, sectest.Bob, []sdkauthz.Segment{{ResourceType: "demo.ghost", Operation: "demo.ghost.read", Atoms: map[string]sdkauthz.Atom{},
+		ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}})
 	refused := submitChange(t, w, sectest.Alice, ghost, 400)
 	assert.Equal(t, "REQUEST_INVALID", refused["reason"])
 	assert.Contains(t, refused["detail"], "not registered")
@@ -198,36 +196,28 @@ func TestMemberEndToEnd(t *testing.T) {
 	require.NoError(t, invoices.Validate())
 	require.NoError(t, invoices.Submit(ctx, authzv3.NewDefinitionServiceClient(dial(t, w, "demo/invoices")), w.Deployment, "3.0.0"))
 	submitChange(t, w, sectest.Alice, invoiceGrant, 200)
-	east := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "u1", "action": "unit.create", "unit": root, "name": "east",
-		"managed_scope": []sdkauthz.Segment{orderSeg(region("east"))}, "grantable_operations": []string{"demo.order.read"}}, 200)
+	east := submitChange(t, w, sectest.Alice, unitReq("u1", root, "east", []sdkauthz.Segment{orderSeg(region("east"))}, []string{"demo.order.read"}), 200)
 	eastID := east["record"].(string)
-	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "h1", "action": "holding.create", "unit": eastID, "holder": sectest.Bob}, 200)
+	submitChange(t, w, sectest.Alice, holdingReq("h1", eastID, sectest.Bob), 200)
 	authzSegs := []sdkauthz.Segment{}
 	for _, op := range []string{OpRead, OpChange} {
 		authzSegs = append(authzSegs, sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{},
 			ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}})
 	}
-	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "g0", "action": "grant.create", "unit": root, "grantee": sectest.Bob,
-		"segments": authzSegs}, 200)
+	submitChange(t, w, sectest.Alice, grantReq("g0", root, sectest.Bob, authzSegs), 200)
 
 	// Bob grants within his limit; beyond it is refused (the boundary card's story)
 	waitForView(t, w, sectest.Bob) // his grant on the member's own records reaches the member's own view
-	ok := submitChange(t, w, sectest.Bob, map[string]any{"change_key": "b1", "action": "grant.create", "unit": eastID, "grantee": carol,
-		"segments": []sdkauthz.Segment{orderSeg(region("east"))}}, 200)
-	beyond := submitChange(t, w, sectest.Bob, map[string]any{"change_key": "b2", "action": "grant.create", "unit": eastID, "grantee": carol,
-		"segments": []sdkauthz.Segment{orderSeg(region("east", "west"))}}, 403)
+	ok := submitChange(t, w, sectest.Bob, grantReq("b1", eastID, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
+	beyond := submitChange(t, w, sectest.Bob, grantReq("b2", eastID, carol, []sdkauthz.Segment{orderSeg(region("east", "west"))}), 403)
 	assert.Equal(t, "CONTAINMENT_NOT_PROVEN", beyond["reason"])
-	again := submitChange(t, w, sectest.Bob, map[string]any{"change_key": "b2", "action": "grant.create", "unit": eastID, "grantee": carol,
-		"segments": []sdkauthz.Segment{orderSeg(region("east", "west"))}}, 403)
+	again := submitChange(t, w, sectest.Bob, grantReq("b2", eastID, carol, []sdkauthz.Segment{orderSeg(region("east", "west"))}), 403)
 	assert.Equal(t, "CONTAINMENT_NOT_PROVEN", again["reason"], "a final rejection binds its key")
-	conflict := submitChange(t, w, sectest.Bob, map[string]any{"change_key": "b1", "action": "grant.create", "unit": eastID, "grantee": carol,
-		"segments": []sdkauthz.Segment{orderSeg(region("west"))}}, 409)
+	conflict := submitChange(t, w, sectest.Bob, grantReq("b1", eastID, carol, []sdkauthz.Segment{orderSeg(region("west"))}), 409)
 	assert.Equal(t, "CHANGE_KEY_CONFLICT", conflict["reason"])
-	replay := submitChange(t, w, sectest.Bob, map[string]any{"change_key": "b1", "action": "grant.create", "unit": eastID, "grantee": carol,
-		"segments": []sdkauthz.Segment{orderSeg(region("east"))}}, 200)
+	replay := submitChange(t, w, sectest.Bob, grantReq("b1", eastID, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
 	assert.Equal(t, ok["record"], replay["record"], "the same change under its key: the same result, no second record")
-	outside := submitChange(t, w, sectest.Bob, map[string]any{"change_key": "b3", "action": "grant.create", "unit": root, "grantee": carol,
-		"segments": []sdkauthz.Segment{orderSeg(region("west"))}}, 403)
+	outside := submitChange(t, w, sectest.Bob, grantReq("b3", root, carol, []sdkauthz.Segment{orderSeg(region("west"))}), 403)
 	assert.Equal(t, "PERMISSION_DENIED", outside["reason"], "Bob does not manage the root")
 
 	// the grant reaches demo/orders' view at its next verification; a revocation leaves it at the next one
@@ -235,7 +225,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	require.Equal(t, "changed", ans.Shards[0].Status)
 	require.Contains(t, ans.Shards[0].View.Subjects, carol)
 	held.Digest = ans.Shards[0].View.Digest
-	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "r1", "action": "grant.revoke", "target": ok["record"]}, 200)
+	submitChange(t, w, sectest.Alice, tightenReq("r1", ok["record"]), 200)
 	ans = verify(held)
 	require.Equal(t, "changed", ans.Shards[0].Status)
 	assert.NotContains(t, ans.Shards[0].View.Subjects, carol, "revoked: gone from the very next view")
@@ -248,12 +238,106 @@ func TestMemberEndToEnd(t *testing.T) {
 			aliceHolding = h["id"].(string)
 		}
 	}
-	last := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "e1", "action": "holding.end", "target": aliceHolding}, 409)
+	last := submitChange(t, w, sectest.Alice, tightenReq("e1", aliceHolding), 409)
 	assert.Equal(t, "LAST_ADMIN_PROTECTED", last["reason"])
 
+	// T4: the lifecycle at the effect point (security 08): records read back from the table
+	type row struct {
+		State, EndReason   string
+		Revision, StateRev int64
+		Predecessor        string
+	}
+	recordRow := func(id any) row {
+		var r row
+		var end, pred *string
+		require.NoError(t, admin.QueryRow(ctx, "SELECT state, end_reason, revision, state_revision, predecessor::text FROM "+
+			itSchema+".authz_record WHERE id = $1", id).Scan(&r.State, &end, &r.Revision, &r.StateRev, &pred))
+		if end != nil {
+			r.EndReason = *end
+		}
+		if pred != nil {
+			r.Predecessor = *pred
+		}
+		return r
+	}
+	wide := submitChange(t, w, sectest.Alice, grantReq("t1", root, carol, []sdkauthz.Segment{orderSeg(region("east", "west"))}), 200)
+	assert.Equal(t, "applied", wide["outcome"])
+	assert.Equal(t, map[string]any{"domain": "authz.record.state", "value": "1"}, wide["new_revision"])
+	// a narrowing: the same record, a new content revision
+	narrow := map[string]any{"change_key": "t2", "direction": "tighten", "target": wide["record"],
+		"expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"},
+		"expected_revision":       map[string]any{"domain": "authz.record.revision", "value": "1"}}
+	cand, _ := json.Marshal(map[string]any{"governance_unit": root, "grantee": carol, "segments": []sdkauthz.Segment{orderSeg(region("east"))}})
+	narrow["candidate"], narrow["candidate_digest"] = json.RawMessage(cand), candidateDigest("grant", cand)
+	n := submitChange(t, w, sectest.Alice, narrow, 200)
+	assert.Equal(t, wide["record"], n["record"], "a narrowing keeps the record")
+	assert.Equal(t, row{State: "active", Revision: 2, StateRev: 2}, recordRow(wide["record"]))
+	// the same request again: its stale revisions (CHANGE_REVISION_STALE, rows 4 and 17) never reach it, the key does
+	again2 := narrow
+	again2["change_key"], again2["expected_revision"] = "t3", map[string]any{"domain": "authz.record.revision", "value": "2"}
+	stale := submitChange(t, w, sectest.Alice, again2, 409)
+	assert.Equal(t, "CHANGE_REVISION_STALE", stale["reason"], "the state revision moved on (row 4)")
+	again2["change_key"], again2["expected_state_revision"] = "t4", map[string]any{"domain": "authz.record.state", "value": "2"}
+	again2["expected_revision"] = map[string]any{"domain": "authz.record.revision", "value": "1"}
+	stale = submitChange(t, w, sectest.Alice, again2, 409)
+	assert.Equal(t, "CHANGE_REVISION_STALE", stale["reason"], "the content revision moved on (row 17)")
+	// a tightening whose candidate is wider: split it
+	wider := map[string]any{"change_key": "t5", "direction": "tighten", "target": wide["record"]}
+	cand, _ = json.Marshal(map[string]any{"governance_unit": root, "grantee": carol, "segments": []sdkauthz.Segment{orderSeg(region("east", "north"))}})
+	wider["candidate"], wider["candidate_digest"] = json.RawMessage(cand), candidateDigest("grant", cand)
+	split := submitChange(t, w, sectest.Alice, wider, 400)
+	assert.Contains(t, split["detail"], "split into a tightening and a widening")
+	// a renewal that does not contain its predecessor: rejected for good, the candidate kept as ended (rejected)
+	renew := grantReq("t6", root, carol, []sdkauthz.Segment{orderSeg(region("north"))})
+	cand, _ = json.Marshal(map[string]any{"governance_unit": root, "grantee": carol, "segments": []sdkauthz.Segment{orderSeg(region("north"))},
+		"predecessor": wide["record"], "record_type": "grant"})
+	renew["candidate"], renew["candidate_digest"] = json.RawMessage(cand), candidateDigest("grant", cand)
+	notContained := submitChange(t, w, sectest.Alice, renew, 403)
+	assert.Equal(t, "CONTAINMENT_NOT_PROVEN", notContained["reason"])
+	code, byKey := call(t, w, sectest.Alice, "GET", "/api/authz/changes/t6", nil)
+	require.Equal(t, 200, code)
+	assert.Equal(t, "rejected", byKey["outcome"], "a final rejection binds the key")
+	assert.Equal(t, row{State: "ended", EndReason: "rejected", Revision: 1, StateRev: 1, Predecessor: wide["record"].(string)},
+		recordRow(byKey["record"]))
+	// one that does: the predecessor ends superseded in the same transaction
+	cand, _ = json.Marshal(map[string]any{"governance_unit": root, "grantee": carol, "segments": []sdkauthz.Segment{orderSeg(region("east", "north"))},
+		"predecessor": wide["record"], "record_type": "grant"})
+	renew = map[string]any{"change_key": "t7", "direction": "widen", "candidate": json.RawMessage(cand), "candidate_digest": candidateDigest("grant", cand)}
+	renewed := submitChange(t, w, sectest.Alice, renew, 200)
+	assert.Equal(t, row{State: "ended", EndReason: "superseded", Revision: 2, StateRev: 3}, recordRow(wide["record"]))
+	assert.Equal(t, wide["record"], recordRow(renewed["record"]).Predecessor)
+	code, out := call(t, w, sectest.Alice, "GET", "/api/authz/changes/never-used", nil)
+	require.Equal(t, 200, code)
+	assert.Equal(t, "unbound", out["outcome"], "nothing bound under the key: submit it again with the same key")
+	ended := submitChange(t, w, sectest.Alice, tightenReq("t8", renewed["record"]), 200)
+	assert.Equal(t, row{State: "ended", EndReason: "revoked", Revision: 1, StateRev: 2, Predecessor: wide["record"].(string)},
+		recordRow(ended["record"]), "a manager's revocation")
+	// a termination of an effective record is stale (row 4); a future widening waits for T4d
+	live := submitChange(t, w, sectest.Alice, grantReq("t9a", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
+	term := map[string]any{"change_key": "t9", "direction": "tighten", "target": live["record"], "termination": "cancel",
+		"expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}
+	assert.Equal(t, "CHANGE_REVISION_STALE", submitChange(t, w, sectest.Alice, term, 409)["reason"])
+	future := grantReq("t10", root, carol, []sdkauthz.Segment{orderSeg(region("east"))})
+	future["effective_from"] = time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	assert.Equal(t, "CAPABILITY_UNSUPPORTED", submitChange(t, w, sectest.Alice, future, 501)["reason"])
+	submitChange(t, w, sectest.Alice, tightenReq("t9b", live["record"]), 200)
+	// a record past its own validity gives no access at once, before anything ends it
+	cand, _ = json.Marshal(map[string]any{"record_type": "grant", "governance_unit": root, "grantee": carol,
+		"segments": []sdkauthz.Segment{orderSeg(region("east"))},
+		"valid":    map[string]any{"from": "2026-01-01T00:00:00.000000Z", "until": "2026-01-02T00:00:00.000000Z"}})
+	past := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "t11", "direction": "widen",
+		"candidate": json.RawMessage(cand), "candidate_digest": candidateDigest("grant", cand)}, 200)
+	assert.Equal(t, "active", recordRow(past["record"]).State)
+	ans = verify(held)
+	if ans.Shards[0].Status == "changed" {
+		held.Digest = ans.Shards[0].View.Digest
+		assert.NotContains(t, ans.Shards[0].View.Subjects, carol, "past its validity: not in the view")
+	} else {
+		t.Fatalf("the view did not change after an applied change: %s", ans.Shards[0].Status)
+	}
+
 	// T3: the identity member's account status reaches the views (security 03's internal sources; P8.25)
-	again4 := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "b4", "action": "grant.create", "unit": root,
-		"grantee": carol, "segments": []sdkauthz.Segment{orderSeg(region("east"))}}, 200)
+	again4 := submitChange(t, w, sectest.Alice, grantReq("b4", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
 	require.NotEmpty(t, again4["record"])
 	carolNow := func(want func(sdkauthz.SubjectEntry) bool) sdkauthz.SubjectEntry {
 		var e sdkauthz.SubjectEntry
@@ -281,7 +365,7 @@ func TestMemberEndToEnd(t *testing.T) {
 		code, out := callAs(t, "Bearer "+w.TokenAt(sectest.Bob, 1), "GET", "/api/authz/records?type=grant", nil)
 		return code == 401 && out["reason"] == "TOKEN_STALE"
 	}, 10*time.Second, 200*time.Millisecond, "TOKEN_STALE once the member's own view has the new version")
-	code, out := callAs(t, "Bearer "+w.TokenAt(sectest.Bob, 2), "GET", "/api/authz/records?type=grant", nil)
+	code, out = callAs(t, "Bearer "+w.TokenAt(sectest.Bob, 2), "GET", "/api/authz/records?type=grant", nil)
 	assert.Equal(t, 200, code, "%v", out)
 
 	// the identity member goes quiet: past D_src_high (3 s) the views renew for ordinary reads only, past D_src_read
@@ -382,4 +466,30 @@ func portFree(t *testing.T, addrs ...string) {
 		require.NoError(t, err, "port %s is taken: is a cell or another member running?", a)
 		_ = ln.Close()
 	}
+}
+
+// grantReq, unitReq and holdingReq are widenings with their candidate (09a's be.security.change_request); tightenReq
+// ends its target.
+func widenReq(key, recordType string, candidate map[string]any) map[string]any {
+	candidate["record_type"] = recordType
+	raw, _ := json.Marshal(candidate)
+	return map[string]any{"change_key": key, "direction": "widen", "candidate": json.RawMessage(raw),
+		"candidate_digest": candidateDigest(recordType, raw)}
+}
+
+func grantReq(key string, unit, grantee any, segs []sdkauthz.Segment) map[string]any {
+	return widenReq(key, "grant", map[string]any{"governance_unit": unit, "grantee": grantee, "segments": segs})
+}
+
+func unitReq(key string, parent any, name string, scope []sdkauthz.Segment, ops []string) map[string]any {
+	return widenReq(key, "management_unit", map[string]any{"parent": parent, "name": name, "managed_scope": scope,
+		"grantable_operations": ops})
+}
+
+func holdingReq(key string, unit any, holder string) map[string]any {
+	return widenReq(key, "management_holding", map[string]any{"unit": unit, "holder": holder})
+}
+
+func tightenReq(key string, target any) map[string]any {
+	return map[string]any{"change_key": key, "direction": "tighten", "target": target}
 }
