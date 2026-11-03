@@ -8,17 +8,19 @@ package authz
 import (
 	"embed"
 	"io/fs"
+	"time"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/component"
 	"github.com/brickKit/be-sdk-go/v3/config"
+	"github.com/brickKit/be-sdk-go/v3/events"
 	"github.com/brickKit/be-sdk-go/v3/runtime"
 )
 
 // Identity of the component.
 const (
 	ID      = "infra/authz"
-	Version = "3.0.15"
+	Version = "3.0.16"
 )
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.
@@ -33,6 +35,22 @@ const (
 	GRPCPort       = 9223
 	ShardDomain    = "authz.view."
 	SecurityDomain = "authz.security.deployment"
+)
+
+// The identity member's account status, an internal source with a watermark (security 03, D64): every identity member
+// declares this stream (contract-infra-iam); the member keeps the projection Accounts of it.
+var AccountStream = events.Stream{Name: "infra.iam.account_status", Partitions: 4}
+
+const Accounts = "accounts"
+
+// Starting values of security 03's renewal and closing (D64): a view that depends on the source renews for high-risk
+// operations while its watermark is no older than SourceHigh, for ordinary reads no older than SourceRead; the
+// profile bounds what a customer may set.
+const (
+	DefaultSourceHigh = time.Minute
+	DefaultSourceRead = 10 * time.Minute
+	MaxSourceHigh     = 5 * time.Minute
+	MaxSourceRead     = time.Hour
 )
 
 //go:embed migrations/*.sql
@@ -54,6 +72,14 @@ func Keys() []config.Key {
 		{Name: "AUTHZ_REGISTRY", Type: config.String, Required: true, Secret: true},
 		// the install claim, simplified: this principal becomes the first authorization admin of an empty member
 		{Name: "AUTHZ_BOOTSTRAP_ADMIN", Type: config.String},
+		// the identity member: its system surface ($endpoint:<member>:grpc) and its component ID (the certificate it
+		// presents, the source's name); config/vars.yaml gives both, changed together when the member is switched
+		{Name: "IAM_GRPC_URL", Type: config.String, Required: true},
+		{Name: "IAM_COMPONENT", Type: config.String, Required: true},
+		// D_src_high and D_src_read (security 03): the watermark ages at which high-risk operations, then ordinary
+		// reads, close for views that depend on the identity source
+		{Name: "AUTHZ_SOURCE_HIGH", Type: config.Duration, Default: DefaultSourceHigh},
+		{Name: "AUTHZ_SOURCE_READ", Type: config.Duration, Default: DefaultSourceRead},
 	}
 }
 
@@ -79,5 +105,6 @@ func Definitions() *sdkauthz.Definitions {
 // Definition is the component as the launcher and the shells take it.
 func Definition() component.Definition {
 	return component.Definition{ID: ID, Version: Version, Keys: Keys(), Migrations: migrations(), GRPCPort: GRPCPort,
-		Authz: Definitions(), New: func(rt *runtime.Runtime) (component.Module, error) { return New(rt) }}
+		Subscribes: true, Authz: Definitions(),
+		New: func(rt *runtime.Runtime) (component.Module, error) { return New(rt) }}
 }

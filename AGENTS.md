@@ -9,7 +9,7 @@
 | `authz/definition.go` | 组件定义、配置键、本组件自己的资源与操作 |
 | `authz/module.go` | 系统面与用户面的注册、启动时的状态行与安装认领 |
 | `authz/submit.go` | `DefinitionService.Submit`：注册表、逐份校验、版本与幂等 |
-| `authz/view.go` | `ViewService.Verify`：按已提交的记录重新计算一个组件的分片 |
+| `authz/view.go` | `ViewService.Verify`：按已提交的记录重新计算一个组件的分片；主体的账号状态取自身份来源的投影（`JudgeMany`），来源的水位年龄决定完整续发、只为普通读取续发或关闭 |
 | `authz/effect.go` | 生效点：变更键、管理资格、包含证明、最后管理员、推进修订、审计 |
 | `authz/security.go` | 记录的字段、逐维的包含规则 |
 | `cmd/seed`（`make seed`） | 种子：给单元管理员授予本组件自己的操作；角色、授予与管理单元由定义那些操作的组件的种子建立 |
@@ -21,7 +21,8 @@
 - `go test ./...`：单元测试，覆盖包含规则的每一行、注册表、提交的交叉检查与合并安全。
 - `go test -tags integration ./authz/`：
   - 依赖：本机的 PostgreSQL（环境变量 `AUTHZ_IT_PG_PASSWORD`），以及 be-sdk-go 的 `sectest` 测试部署；
-  - 覆盖：提交的规则；视图经 SDK 自己的客户端打开；越权授出被拒；撤权在下一次核验里消失；变更键；最后管理员；审计。
+  - 覆盖：提交的规则；视图经 SDK 自己的客户端打开；越权授出被拒；撤权在下一次核验里消失；变更键；最后管理员；审计；身份来源（测试里的替身组件 `test/iam`，见 `authz/identity_integration_test.go`：只声明账号状态流，SDK 给它挂上补取与读取）：账号的安全状态版本与停用进视图、旧版本的令牌在本组件的用户面答 `TOKEN_STALE`、来源停住时先只为普通读取续发再关闭、恢复后完整续发。
+  - 消息系统用 `pgqueue://`，放在每次重建的 schema `authz_it_bus`：共用的消息系统上会收到以前几次运行的部署的事件，按 P9.11 会把来源判为 `blocked`。
 - `brickkit lint`
 
 ## 设计取舍

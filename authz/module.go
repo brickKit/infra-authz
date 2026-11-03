@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -11,10 +12,12 @@ import (
 	"github.com/brickKit/be-sdk-go/v3/canon"
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/errs"
+	"github.com/brickKit/be-sdk-go/v3/events"
 	"github.com/brickKit/be-sdk-go/v3/grpcx"
 	"github.com/brickKit/be-sdk-go/v3/httpx"
 	"github.com/brickKit/be-sdk-go/v3/identity"
 	"github.com/brickKit/be-sdk-go/v3/ids"
+	"github.com/brickKit/be-sdk-go/v3/projection"
 	"github.com/brickKit/be-sdk-go/v3/runtime"
 	authzv3 "github.com/brickKit/contract-infra-authz/v3/gen/go/be/authz/v3"
 )
@@ -30,6 +33,11 @@ type Module struct {
 	mu      sync.Mutex
 	regText string
 	reg     registry
+
+	// accounts is the identity member's account status, kept with its watermark; srcHigh and srcRead are D_src_high
+	// and D_src_read
+	accounts         *projection.Watermarked
+	srcHigh, srcRead time.Duration
 }
 
 // New builds the module from its runtime.
@@ -43,7 +51,27 @@ func New(rt *runtime.Runtime) (*Module, error) {
 	if _, err := m.registry(); err != nil {
 		return nil, err
 	}
+	m.srcHigh, m.srcRead = rt.Config.Duration("AUTHZ_SOURCE_HIGH"), rt.Config.Duration("AUTHZ_SOURCE_READ")
+	if m.srcHigh <= 0 || m.srcHigh > MaxSourceHigh || m.srcRead < m.srcHigh || m.srcRead > MaxSourceRead {
+		return nil, errs.New(errs.ReasonRequestInvalid, fmt.Sprintf(
+			"AUTHZ_SOURCE_HIGH (%s) is above zero and at most %s; AUTHZ_SOURCE_READ (%s) is no shorter and at most %s",
+			m.srcHigh, MaxSourceHigh, m.srcRead, MaxSourceRead))
+	}
+	iam := rt.Config.String("IAM_COMPONENT")
+	conn, ok := rt.GRPCAt(iam, rt.Config.String("IAM_GRPC_URL"))
+	if !ok {
+		return nil, errs.New(errs.ReasonRequestInvalid, "IAM_GRPC_URL cannot be dialled: the identity member's system surface")
+	}
+	m.accounts = &projection.Watermarked{Projection: projection.Projection{Name: Accounts}, DB: rt.DB, Source: iam,
+		Stream: AccountStream, Deployment: m.deployment, Freshness: m.srcHigh, Pull: projection.PullClient{Conn: conn},
+		Snapshot: projection.RecordClient{Conn: conn, Stream: AccountStream.Name}, Log: rt.Logger}
 	return m, nil
+}
+
+// Subscriptions takes the account status stream, every event in position order (P9.19).
+func (m *Module) Subscriptions(s *events.Subscriptions) error {
+	s.Add(m.accounts.Sub(Accounts))
+	return nil
 }
 
 // registry parses AUTHZ_REGISTRY again only when it changed (the SDK re-reads the file).
@@ -121,9 +149,14 @@ func (m *Module) recordsHTTP(c *httpx.Context) error {
 	return c.JSON(200, map[string]any{"records": out})
 }
 
-// Start writes the member's state row on first start, refuses an instance other than the one installed, and runs
-// the install claim when the member has no management at all.
+// Start writes the member's state row on first start, refuses an instance other than the one installed, runs the
+// install claim when the member has no management at all, and keeps the account projection fresh (pulls, alignment)
+// for as long as ctx lives.
 func (m *Module) Start(ctx context.Context) error {
+	if err := m.accounts.Install(ctx); err != nil {
+		return err
+	}
+	go m.accounts.Run(ctx)
 	return m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
 		if _, err := tx.Exec(ctx, "INSERT INTO authz_state (instance) VALUES ($1) ON CONFLICT DO NOTHING", m.instance); err != nil {
 			return err

@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/config"
+	"github.com/brickKit/be-sdk-go/v3/events/pgqueue"
 	"github.com/brickKit/be-sdk-go/v3/launcher"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
 	authzv3 "github.com/brickKit/contract-infra-authz/v3/gen/go/be/authz/v3"
@@ -34,12 +36,13 @@ import (
 )
 
 const (
-	itPort   = "28223"
-	itBase   = "http://localhost:" + itPort
-	itSystem = "localhost:9223"
-	itSchema = "authz_it"
-	itDB     = "brickkit_test_db"
-	carol    = "0190f3a1-0000-7000-8000-0000000000c3"
+	itPort    = "28223"
+	itBase    = "http://localhost:" + itPort
+	itSystem  = "localhost:9223"
+	itSchema  = "authz_it"
+	itDB      = "brickkit_test_db"
+	carol     = "0190f3a1-0000-7000-8000-0000000000c3"
+	busSchema = "authz_it_bus"
 )
 
 // orders is a component with one dimension, to grant within limits.
@@ -81,16 +84,26 @@ func TestMemberEndToEnd(t *testing.T) {
 	admin, err := pgx.Connect(ctx, "postgres://postgres:"+url.QueryEscape(pgPassword)+"@localhost:5432/"+itDB+"?sslmode=disable")
 	require.NoError(t, err)
 	defer admin.Close(ctx)
-	_, err = admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+itSchema+" CASCADE; CREATE SCHEMA "+itSchema)
+	_, err = admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+itSchema+" CASCADE; CREATE SCHEMA "+itSchema+
+		"; DROP SCHEMA IF EXISTS "+iamSchema+" CASCADE; CREATE SCHEMA "+iamSchema+"; DROP SCHEMA IF EXISTS "+busSchema+" CASCADE; CREATE SCHEMA "+busSchema)
 	require.NoError(t, err)
+	// the bus in its own schema, new for every run: a stream on a shared bus would bring events of earlier runs'
+	// deployments, and those block the source (P9.11)
+	busURL := "pgqueue://postgres:" + url.QueryEscape(pgPassword) + "@localhost:5432/" + itDB + "?schema=" + busSchema
+	require.NoError(t, pgqueue.Migrate(ctx, busURL, slog.New(slog.NewTextHandler(io.Discard, nil))))
 
 	w := sectest.New(t)
 	portFree(t, itPort, itSystem)
+	iam, stopIAM := startIAM(t, w, pgPassword, busURL, true)
+	for _, p := range []string{sectest.Alice, sectest.Bob, carol} {
+		require.NoError(t, iam.set(ctx, p, "active", 1))
+	}
 	env := w.Env(t, ID)
 	for k, v := range map[string]string{"COMPONENT_ID": ID, "COMPONENT_VERSION": Version, "PORT": itPort, "STOP_DRAIN_DELAY": "50ms",
 		"PG_HOST": "localhost", "PG_DATABASE": itDB, "PG_USER": "postgres", "PG_PASSWORD": pgPassword, "PG_SCHEMA": itSchema,
 		"PG_OWNER_USER": "postgres", "PG_OWNER_PASSWORD": pgPassword, "AUTHZ_INSTANCE": "authz-it-instance",
-		"AUTHZ_REGISTRY": registryTSV, "AUTHZ_BOOTSTRAP_ADMIN": sectest.Alice,
+		"AUTHZ_REGISTRY": registryTSV, "AUTHZ_BOOTSTRAP_ADMIN": sectest.Alice, "BUS_URL": busURL,
+		"IAM_GRPC_URL": "http://" + iamSystem, "IAM_COMPONENT": iamID, "AUTHZ_SOURCE_HIGH": "3s", "AUTHZ_SOURCE_READ": "6s",
 		"AUTHZ_GRPC_URL": "http://" + itSystem} { // the member guards its own user surface with its own view
 		env[k] = v
 	}
@@ -120,6 +133,7 @@ func TestMemberEndToEnd(t *testing.T) {
 		return err == nil && r.StatusCode == 200
 	}, 15*time.Second, 100*time.Millisecond, "the member submits to itself and verifies its own view")
 	require.True(t, ready)
+	waitForView(t, w, sectest.Alice) // the account projection aligned with the identity member: views renew
 
 	// a component over mTLS: its definitions, then its view through the SDK's own client
 	conn := dial(t, w, "demo/orders")
@@ -237,6 +251,60 @@ func TestMemberEndToEnd(t *testing.T) {
 	last := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "e1", "action": "holding.end", "target": aliceHolding}, 409)
 	assert.Equal(t, "LAST_ADMIN_PROTECTED", last["reason"])
 
+	// T3: the identity member's account status reaches the views (security 03's internal sources; P8.25)
+	again4 := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "b4", "action": "grant.create", "unit": root,
+		"grantee": carol, "segments": []sdkauthz.Segment{orderSeg(region("east"))}}, 200)
+	require.NotEmpty(t, again4["record"])
+	carolNow := func(want func(sdkauthz.SubjectEntry) bool) sdkauthz.SubjectEntry {
+		var e sdkauthz.SubjectEntry
+		require.Eventually(t, func() bool {
+			ans := verify(held)
+			if ans.Shards[0].Status == "changed" {
+				held.Digest, e = ans.Shards[0].View.Digest, ans.Shards[0].View.Subjects[carol]
+			}
+			return want(e)
+		}, 10*time.Second, 200*time.Millisecond)
+		return e
+	}
+	e := carolNow(func(e sdkauthz.SubjectEntry) bool { return len(e.Segments) > 0 })
+	assert.EqualValues(t, 1, e.SecurityVersion, "the account's security version is in the view")
+	assert.False(t, e.AccountsDisabled)
+	require.NoError(t, iam.set(ctx, carol, "active", 2)) // a password change at the identity member
+	carolNow(func(e sdkauthz.SubjectEntry) bool { return e.SecurityVersion == 2 })
+	require.NoError(t, iam.set(ctx, carol, "disabled", 3))
+	e = carolNow(func(e sdkauthz.SubjectEntry) bool { return e.AccountsDisabled })
+	assert.EqualValues(t, 3, e.SecurityVersion)
+
+	// Bob's security change: tokens issued before are stale at the member's own surface; one of the new version passes
+	require.NoError(t, iam.set(ctx, sectest.Bob, "active", 2))
+	require.Eventually(t, func() bool {
+		code, out := callAs(t, "Bearer "+w.TokenAt(sectest.Bob, 1), "GET", "/api/authz/records?type=grant", nil)
+		return code == 401 && out["reason"] == "TOKEN_STALE"
+	}, 10*time.Second, 200*time.Millisecond, "TOKEN_STALE once the member's own view has the new version")
+	code, out := callAs(t, "Bearer "+w.TokenAt(sectest.Bob, 2), "GET", "/api/authz/records?type=grant", nil)
+	assert.Equal(t, 200, code, "%v", out)
+
+	// the identity member goes quiet: past D_src_high (3 s) the views renew for ordinary reads only, past D_src_read
+	// (6 s) they close; once it answers again they renew fully (security 03's renewal and closing, P8.11)
+	stopIAM()
+	status := func() (string, bool) {
+		ans := verify(held)
+		if ans.Shards[0].Status == "changed" {
+			held.Digest = ans.Shards[0].View.Digest
+		}
+		return ans.Shards[0].Status, ans.Shards[0].ReadOnly
+	}
+	st, ro := status()
+	require.True(t, st != "closed" && !ro, "the precondition: a fresh source renews fully (%s, read-only %v)", st, ro)
+	require.Eventually(t, func() bool { st, ro := status(); return st != "closed" && ro }, 10*time.Second, 200*time.Millisecond,
+		"ordinary reads only")
+	require.Eventually(t, func() bool { st, _ := status(); return st == "closed" }, 10*time.Second, 200*time.Millisecond,
+		"closed")
+	_, stopIAM = startIAM(t, w, pgPassword, busURL, false)
+	require.Eventually(t, func() bool { st, ro := status(); return st != "closed" && !ro }, 15*time.Second, 200*time.Millisecond,
+		"renewed fully again")
+	stopIAM()
+
 	// every applied change was audited in its transaction
 	var audited int
 	require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_audit_log WHERE category = 'security_change'").Scan(&audited))
@@ -252,13 +320,17 @@ func dial(t *testing.T, w *sectest.World, component string) *grpc.ClientConn {
 }
 
 func call(t *testing.T, w *sectest.World, who, method, path string, body any) (int, map[string]any) {
+	return callAs(t, w.Bearer(who), method, path, body)
+}
+
+func callAs(t *testing.T, bearer, method, path string, body any) (int, map[string]any) {
 	var r io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
 		r = bytes.NewReader(b)
 	}
 	req, _ := http.NewRequest(method, itBase+path, r)
-	req.Header.Set("Authorization", w.Bearer(who))
+	req.Header.Set("Authorization", bearer)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
