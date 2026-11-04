@@ -98,6 +98,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	e.dispositions()
 	e.releases()
 	e.identitySide()
+	e.lastAdmin()
 	e.audited()
 }
 

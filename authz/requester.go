@@ -95,20 +95,25 @@ func activeAccount(jd projection.Judged) (proof, error) {
 	return unprovable, nil
 }
 
-// adminsBesides proves whether an authorization admin other than holder stays available (security 08, rows 27-28).
-func (m *Module) adminsBesides(ctx context.Context, tx db.Tx, holder string) (proof, error) {
+// adminsAfter proves whether an authorization admin stays available once a change ends the holdings in ended
+// (security 08's last-admin invariant, rows 27-28): available is a person with an active admin holding outside
+// ended — another holding of the same person counts — whose account the identity source proves active now. Proven:
+// one such person; disproven: every remaining holding's person provably not available (or none left); otherwise not
+// provable.
+func (m *Module) adminsAfter(ctx context.Context, tx db.Tx, ended []string) (proof, error) {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT body->>'holder' FROM authz_record WHERE state = 'active'
-		AND record_type = 'management_holding' AND body->>'system_role' = 'authorization_admin' AND body->>'holder' <> $1`, holder)
+		AND record_type = 'management_holding' AND body->>'system_role' = 'authorization_admin' AND id::text <> ALL($1)`,
+		nonNil(ended))
 	if err != nil {
 		return unprovable, err
 	}
-	others, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil || len(others) == 0 {
+	holders, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil || len(holders) == 0 {
 		return disproven, err
 	}
 	result := disproven
-	for _, o := range others {
-		a, err := m.accountOf(ctx, tx, o)
+	for _, h := range holders {
+		a, err := m.accountOf(ctx, tx, h)
 		if err != nil {
 			return unprovable, err
 		}
@@ -120,4 +125,40 @@ func (m *Module) adminsBesides(ctx context.Context, tx db.Tx, holder string) (pr
 		}
 	}
 	return result, nil
+}
+
+// endedAdminHoldings are the authorization admin holdings a change that ends t ends: t itself, or the active ones
+// in the unit t and below (the closure job ends them after it).
+func endedAdminHoldings(ctx context.Context, tx db.Tx, units map[string]unitBody, t *target) ([]string, error) {
+	switch t.Type {
+	case "management_holding":
+		return []string{t.ID}, nil
+	case "management_unit":
+		recs, err := active(ctx, tx, "management_holding")
+		if err != nil {
+			return nil, err
+		}
+		var out []string
+		for _, r := range recs {
+			var h holdingBody
+			if err := json.Unmarshal(r.Body, &h); err != nil {
+				return nil, err
+			}
+			if h.SystemRole != "authorization_admin" {
+				continue
+			}
+			u := h.Unit
+			for range len(units) + 1 {
+				if sameUnit(units, u, t.ID) {
+					out = append(out, r.ID)
+					break
+				}
+				if u = units[u].Parent; u == "" {
+					break
+				}
+			}
+		}
+		return out, nil
+	}
+	return nil, nil
 }

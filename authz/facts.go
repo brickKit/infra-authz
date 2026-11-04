@@ -415,7 +415,13 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 		if f.AffectsAdmins && t.Type == "management_holding" {
 			// a protected operation: tightening another authorization admin's holding (security 08, item 7)
 			f.TightenNeedsConfirmation = holderOf != requester
-			if f.AdminsAfter, err = m.adminsBesides(ctx, tx, holderOf); err != nil {
+		}
+		if f.AffectsAdmins && p.endReason != "" { // it ends admin holdings: one admin must stay available (rows 27-28)
+			ended, err := endedAdminHoldings(ctx, tx, s.units, t)
+			if err != nil {
+				return false, nil, err
+			}
+			if f.AdminsAfter, err = m.adminsAfter(ctx, tx, ended); err != nil {
 				return false, nil, err
 			}
 		}
