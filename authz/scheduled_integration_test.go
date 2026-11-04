@@ -170,7 +170,7 @@ func testScheduled(t *testing.T, w *sectest.World, admin *pgx.Conn, root, east s
 	// the unit's limit narrows before they are due (CP82): its revision alone does not reject; still contained, it
 	// takes effect; no longer contained, row 18 rejects for good and the record ends rejected
 	ops := []string{"demo.order.read"}
-	lim := submitChange(t, w, sectest.Alice, unitReq("d9", root, "lim82", []sdkauthz.Segment{orderSeg(region("east", "west"))}, ops), 200)
+	lim := protect(t, w, sectest.Alice, unitReq("d9", root, "lim82", []sdkauthz.Segment{orderSeg(region("east", "west"))}, ops))
 	west := submitChange(t, w, sectest.Alice, scheduledGrant("d9w", lim["record"], carol, []sdkauthz.Segment{orderSeg(region("west"))}, 2*time.Second), 202)
 	stays := submitChange(t, w, sectest.Alice, scheduledGrant("d9e", lim["record"], carol, seg, 2*time.Second), 202)
 	limRaw, _ := json.Marshal(map[string]any{"name": "lim82", "parent": root, "managed_scope": seg, "grantable_operations": ops})
@@ -186,7 +186,7 @@ func testScheduled(t *testing.T, w *sectest.World, admin *pgx.Conn, root, east s
 
 	// the applicant withdraws a pending request after losing the management it was made with (row 7, CP91); a
 	// manager without the domain cannot cancel another's (row 8, CP98)
-	submitChange(t, w, sectest.Alice, holdingReq("d10h", lim["record"], sectest.Bob), 200)
+	protect(t, w, sectest.Alice, holdingReq("d10h", lim["record"], sectest.Bob))
 	var bobHolds string
 	for _, h := range listRecords(t, w, sectest.Alice, "management_holding") {
 		if b := h["body"].(map[string]any); b["holder"] == sectest.Bob && b["unit"] == lim["record"] {

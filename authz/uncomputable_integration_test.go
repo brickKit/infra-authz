@@ -47,7 +47,7 @@ func testUncomputable(t *testing.T, w *sectest.World, admin *pgx.Conn, root stri
 	const tree, eastWest = `{"kind":"tree","items":[{"path":"/east","mode":"subtree"}]}`, `{"kind":"in","values":["east","west"]}`
 
 	// the closure finds it cannot be computed: held (uncomputable), no access
-	u1 := submitChange(t, w, sectest.Alice, unitReq("uc1", root, "uc-one", []sdkauthz.Segment{orderSeg(region("east", "west", "north"))}, ops), 200)
+	u1 := protect(t, w, sectest.Alice, unitReq("uc1", root, "uc-one", []sdkauthz.Segment{orderSeg(region("east", "west", "north"))}, ops))
 	g := submitChange(t, w, sectest.Alice, grantReq("uc2", u1["record"], carol, []sdkauthz.Segment{orderSeg(region("east", "west"))}), 200)
 	setRegion(g["record"], tree)
 	narrowUnit("uc3", u1["record"], "uc-one", "east", "west")
@@ -78,7 +78,7 @@ func testUncomputable(t *testing.T, w *sectest.World, admin *pgx.Conn, root stri
 
 	// held, then narrowed by a manager: still held, a new content revision (CP103); the narrowing moved its state
 	// revision, and its unit's closure registers the restore again with the new content (CP115)
-	u2 := submitChange(t, w, sectest.Alice, unitReq("uc5", root, "uc-two", []sdkauthz.Segment{orderSeg(region("east", "west", "north"))}, ops), 200)
+	u2 := protect(t, w, sectest.Alice, unitReq("uc5", root, "uc-two", []sdkauthz.Segment{orderSeg(region("east", "west", "north"))}, ops))
 	g2 := submitChange(t, w, sectest.Alice, grantReq("uc6", u2["record"], carol, []sdkauthz.Segment{orderSeg(region("east", "west"))}), 200)
 	setRegion(g2["record"], tree)
 	narrowUnit("uc7", u2["record"], "uc-two", "east", "west")

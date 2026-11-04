@@ -51,6 +51,19 @@ func (m *Module) enact(ctx context.Context, tx db.Tx, e entry, p plan, v verdict
 		res.Outcome = "held_kept"
 		return res, nil
 	case outScheduled:
+		if p.activate && e.job.Trigger == triggerConfirmed { // confirmed, effective later: scheduled, its own job registered
+			rev, err := m.transition(ctx, tx, p.target.ID, "scheduled", "", "", change, "")
+			if err != nil {
+				return res, err
+			}
+			if _, err := m.rt.Work.EnqueueAt(ctx, tx, JobDue, firing{Record: p.target.ID, StateRevision: rev,
+				Trigger: triggerScheduled}, *p.at); err != nil {
+				return res, err
+			}
+			res.Outcome, res.Record = "scheduled", p.target.ID
+			res.NewRevision = &revisionRef{Domain: stateDomain, Value: strconv.FormatInt(rev, 10)}
+			return res, nil
+		}
 		if p.activate { // its job came early by the database's clock: it waits
 			res.Outcome = "processing"
 			return res, nil
@@ -196,9 +209,9 @@ func (m *Module) insert(ctx context.Context, tx db.Tx, e entry, p plan, state, e
 		end, why = endReason, reason
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO authz_record (id, record_type, state, end_reason, body, requested_by, predecessor,
-			effective_at, valid_from, valid_until, reason, last_change)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, id, p.recType, state, end, body, e.requester, pred,
-		p.at, p.from, p.to, why, e.namespace+":"+e.key); err != nil {
+			effective_at, valid_from, valid_until, reason, last_change, candidate_digest)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`, id, p.recType, state, end, body, e.requester, pred,
+		p.at, p.from, p.to, why, e.namespace+":"+e.key, nullable(e.req.CandidateDigest)); err != nil {
 		return "", err
 	}
 	if err := indexSources(ctx, tx, id, p.recType, body); err != nil {

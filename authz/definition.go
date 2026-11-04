@@ -78,6 +78,10 @@ func Keys() []config.Key {
 		{Name: "AUTHZ_REGISTRY", Type: config.String, Required: true, Secret: true},
 		// the install claim, simplified: this principal becomes the first authorization admin of an empty member
 		{Name: "AUTHZ_BOOTSTRAP_ADMIN", Type: config.String},
+		// the deployment owner's confirmation key (A124): an Ed25519 public key (PEM); its private key is kept offline
+		// by the owner and signs owner confirmations. Absent: no owner confirmation is accepted. Not secret: a secret
+		// key so that file:// delivers it
+		{Name: "AUTHZ_OWNER_KEY", Type: config.String, Secret: true},
 		// the identity member: its system surface ($endpoint:<member>:grpc) and its component ID (the certificate it
 		// presents, the source's name); config/vars.yaml gives both, changed together when the member is switched
 		{Name: "IAM_GRPC_URL", Type: config.String, Required: true},

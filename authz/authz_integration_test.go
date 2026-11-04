@@ -143,6 +143,7 @@ func startE2E(t *testing.T) *e2e {
 	admin, err := pgx.Connect(ctx, "postgres://postgres:"+url.QueryEscape(pgPassword)+"@localhost:5432/"+itDB+"?sslmode=disable")
 	require.NoError(t, err)
 	t.Cleanup(func() { admin.Close(ctx) })
+	itAdmin = admin
 	_, err = admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+itSchema+" CASCADE; CREATE SCHEMA "+itSchema+
 		"; DROP SCHEMA IF EXISTS "+iamSchema+" CASCADE; CREATE SCHEMA "+iamSchema+"; DROP SCHEMA IF EXISTS "+busSchema+" CASCADE; CREATE SCHEMA "+busSchema)
 	require.NoError(t, err)
@@ -163,7 +164,8 @@ func startE2E(t *testing.T) *e2e {
 		"PG_OWNER_USER": "postgres", "PG_OWNER_PASSWORD": pgPassword, "AUTHZ_INSTANCE": "authz-it-instance",
 		"AUTHZ_REGISTRY": registryTSV, "AUTHZ_BOOTSTRAP_ADMIN": sectest.Alice, "BUS_URL": busURL,
 		"IAM_GRPC_URL": "http://" + iamSystem, "IAM_COMPONENT": iamID, "AUTHZ_SOURCE_HIGH": "3s", "AUTHZ_SOURCE_READ": "6s",
-		"AUTHZ_GRPC_URL": "http://" + itSystem} { // the member guards its own user surface with its own view
+		"AUTHZ_OWNER_KEY": ownerPublicPEM(t),
+		"AUTHZ_GRPC_URL":  "http://" + itSystem} { // the member guards its own user surface with its own view
 		env[k] = v
 	}
 	var logs bytes.Buffer
@@ -265,9 +267,9 @@ func (e *e2e) effectPoint() {
 	require.NoError(t, invoices.Validate())
 	require.NoError(t, invoices.Submit(ctx, authzv3.NewDefinitionServiceClient(dial(t, w, "demo/invoices")), w.Deployment, "3.0.0"))
 	submitChange(t, w, sectest.Alice, invoiceGrant, 200)
-	east := submitChange(t, w, sectest.Alice, unitReq("u1", root, "east", []sdkauthz.Segment{orderSeg(region("east"))}, []string{"demo.order.read"}), 200)
+	east := protect(t, w, sectest.Alice, unitReq("u1", root, "east", []sdkauthz.Segment{orderSeg(region("east"))}, []string{"demo.order.read"}))
 	eastID := east["record"].(string)
-	submitChange(t, w, sectest.Alice, holdingReq("h1", eastID, sectest.Bob), 200)
+	protect(t, w, sectest.Alice, holdingReq("h1", eastID, sectest.Bob))
 	authzSegs := []sdkauthz.Segment{}
 	for _, op := range []string{OpRead, OpChange} {
 		authzSegs = append(authzSegs, sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{Holder: {Kind: "all"}},
@@ -445,7 +447,7 @@ func (e *e2e) identity() {
 	// disabled: the account ended as a source; the closure job ends what it was a source of (security 08), a grant
 	// and a holding, once its status is applied
 	daves := submitChange(t, w, sectest.Alice, grantReq("dv1", root, dave, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
-	daveHolds := submitChange(t, w, sectest.Alice, holdingReq("dv2", eastID, dave), 200)
+	daveHolds := protect(t, w, sectest.Alice, holdingReq("dv2", eastID, dave))
 	eves := submitChange(t, w, sectest.Alice, grantReq("dv3", root, eve, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
 	require.NoError(t, iam.setMarked(ctx, eve, "disabled", "compromised", 2)) // a disposition (T6), not the source's end
 	require.NoError(t, iam.set(ctx, dave, "disabled", 2))

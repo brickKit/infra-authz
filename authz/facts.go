@@ -172,6 +172,10 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 			return false, nil, err
 		}
 	}
+	// a protected widening's confirmations, checked again now (security 08: confirmers re-checked at every entry)
+	if p.confirmed, err = m.confirmationsOf(ctx, tx, nil, t, e.requester, recordHolder(t), f); err != nil {
+		return false, nil, err
+	}
 	return structural, nil, nil
 }
 
@@ -221,6 +225,7 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 		}
 		lim = s.limits.of(b.Parent)
 		structural, f.ManagementWiden, p.body, segs = s.manages(b.Parent), true, b, b.ManagedScope
+		f.NeedsConfirmation = true // a protected operation: a new or enlarged management unit (security 08)
 		for _, op := range b.GrantableOperations {
 			if lim == nil || !lim.all && !slices.Contains(lim.ops, op) {
 				f.Contained = false
@@ -237,6 +242,7 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 		}
 		structural = s.manages(b.Unit) && (b.SystemRole == "" || s.admin)
 		f.ManagementWiden, p.body = true, b
+		f.NeedsConfirmation = true // a protected operation: a management holding, a system role (security 08)
 	case "role_revision":
 		var b roleBody
 		_ = json.Unmarshal(raw, &b)
@@ -318,10 +324,10 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 	if req.ExpectedRevision != nil && req.ExpectedRevision.Value != strconv.FormatInt(t.Revision, 10) {
 		f.RevisionsChanged = true
 	}
-	if p.confirmed, err = m.confirmationsOf(ctx, tx, req.ConfirmationIDs, t, requester, f); err != nil {
+	unitOf, holderOf := recordUnit(t), recordHolder(t)
+	if p.confirmed, err = m.confirmationsOf(ctx, tx, req.ConfirmationIDs, t, requester, holderOf, f); err != nil {
 		return false, nil, err
 	}
-	unitOf, holderOf := recordUnit(t), recordHolder(t)
 	structural := false
 	switch {
 	case req.Direction == Tighten && req.Termination != "":
@@ -336,8 +342,17 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 			structural, p.endReason = f.TerminatorEligible, "withdrawn"
 		case "cancel":
 			structural, p.endReason = s.manages(unitOf), "cancelled"
-		case "reject": // a confirmer's rejection: confirmations come with T5; nobody qualifies yet
+		case "reject": // a confirmer's rejection (row 7): someone who may confirm it now, not the applicant, not its object
 			f.Rejection, f.FromState, p.endReason = true, f.FromState && t.State == "awaiting_confirmation", "rejected"
+			ok, err := m.confirmerEligible(ctx, tx, requester)
+			if err != nil {
+				return false, nil, err
+			}
+			if requester == t.RequestedBy || requester == holderOf {
+				ok = disproven
+			}
+			// not provable now: the eligibility facts say so (row 9); disproven: refused (row 8)
+			f.TerminatorEligible, structural = ok == proven, ok != disproven
 		default:
 			return false, invalid("termination is withdraw, reject or cancel"), nil
 		}
@@ -368,6 +383,8 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 			_ = json.Unmarshal(t.Body, &h)
 			if h.SystemRole == "authorization_admin" {
 				f.AffectsAdmins = true
+				// a protected operation: tightening another authorization admin's holding (security 08, item 7)
+				f.TightenNeedsConfirmation = h.Holder != requester
 				if f.AdminsAfter, err = m.adminsBesides(ctx, tx, h.Holder); err != nil {
 					return false, nil, err
 				}

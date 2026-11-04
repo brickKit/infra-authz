@@ -5,6 +5,7 @@ package authz
 import (
 	"context"
 	"testing"
+	"time"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
@@ -35,8 +36,8 @@ func testConfirmations(t *testing.T, w *sectest.World, admin *pgx.Conn, root str
 	code, out := confirm(sectest.Bob, g["record"], 1)
 	require.Equal(t, 403, code, "%v", out)
 	assert.Equal(t, "PERMISSION_DENIED", out["reason"])
-	bobAdmin := submitChange(t, w, sectest.Alice, widenReq("cf2", "management_holding",
-		map[string]any{"unit": root, "holder": sectest.Bob, "system_role": "authorization_admin"}), 200)
+	bobAdmin := protect(t, w, sectest.Alice, widenReq("cf2", "management_holding",
+		map[string]any{"unit": root, "holder": sectest.Bob, "system_role": "authorization_admin"}))
 	waitForView(t, w, sectest.Bob)
 
 	// a valid confirmation: the revocation applies, the confirmation is used by it
@@ -88,9 +89,102 @@ func testConfirmations(t *testing.T, w *sectest.World, admin *pgx.Conn, root str
 
 	// the confirmer is checked again when the change enters: Bob no longer an admin, his confirmation no longer holds
 	_, before := confirm(sectest.Bob, g3["record"], 1)
-	submitChange(t, w, sectest.Alice, tightenReq("cf14", bobAdmin["record"]), 200)
+	// another admin's holding is a protected tightening (security 08, item 7): it carries a confirmation first (row
+	// 21); the deployment owner's stands in for an independent one on any protected tightening
+	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/changes", tightenReq("cf14", bobAdmin["record"]))
+	require.Equal(t, 202, code, "%v", out)
+	assert.Equal(t, "awaiting_confirmation", out["outcome"], "nothing saved: the request comes again with its confirmation")
+	assert.Equal(t, "active", recordOf(t, admin, bobAdmin["record"]).State)
+	byOwner := ownerConfirm(t, w, sectest.Alice, bobAdmin["record"], "1")
+	code, out = revokeWith("cf14", bobAdmin["record"], byOwner["id"])
+	require.Equal(t, 200, code, "%v", out)
 	code, out = revokeWith("cf15", g3["record"], before["id"])
 	require.Equal(t, 202, code, "%v", out)
 	assert.Equal(t, "active", recordOf(t, admin, g3["record"]).State)
 	submitChange(t, w, sectest.Alice, tightenReq("cf16", g3["record"]), 200)
+	testProtected(t, w, admin, root)
+}
+
+// testProtected is T5b-T5d (security 08's protected operations, A124): a new management unit or holding waits for a
+// confirmation; with another authorization admin available an independent person must confirm (the owner's key does
+// not count for a widening then); once confirmed the member's job applies it, or schedules it when effective later;
+// a confirmer may reject it (row 7); the requester is checked again when it enters (CP67).
+func testProtected(t *testing.T, w *sectest.World, admin *pgx.Conn, root string) {
+	ctx := context.Background()
+	ops := []string{"demo.order.read"}
+	scope := []sdkauthz.Segment{orderSeg(region("east"))}
+	bobAdmin := protect(t, w, sectest.Alice, widenReq("pr1", "management_holding",
+		map[string]any{"unit": root, "holder": sectest.Bob, "system_role": "authorization_admin"}))
+	waitForView(t, w, sectest.Bob)
+	jobsDone := func(record any) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			var busy int
+			_ = admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_work_item WHERE job = $1 AND args->>'record' = $2 AND state <> 'done'",
+				JobDue, record).Scan(&busy)
+			return busy == 0
+		}, 10*time.Second, 50*time.Millisecond)
+	}
+
+	// Bob is available: the owner's confirmation does not stand in for him on a widening (row 23: still waiting)
+	u := submitChange(t, w, sectest.Alice, unitReq("pr2", root, "protected", scope, ops), 202)
+	assert.Equal(t, "awaiting_confirmation", recordOf(t, admin, u["record"]).State)
+	ownerConfirm(t, w, sectest.Alice, u["record"], "")
+	jobsDone(u["record"])
+	assert.Equal(t, "awaiting_confirmation", recordOf(t, admin, u["record"]).State, "an independent person must confirm")
+	code, out := call(t, w, sectest.Bob, "POST", "/api/authz/confirmations", map[string]any{"target": u["record"]})
+	require.Equal(t, 201, code, "%v", out)
+	require.Eventually(t, func() bool { return recordOf(t, admin, u["record"]).State == "active" }, 10*time.Second, 50*time.Millisecond,
+		"confirmed by Bob: applied by the job")
+
+	// confirmed, effective later: scheduled, then applied when due
+	later := widenReq("pr3", "management_holding", map[string]any{"unit": u["record"], "holder": carol})
+	later["effective_from"] = time.Now().Add(2 * time.Second).UTC().Format(time.RFC3339Nano)
+	h := submitChange(t, w, sectest.Alice, later, 202)
+	code, out = call(t, w, sectest.Bob, "POST", "/api/authz/confirmations", map[string]any{"target": h["record"]})
+	require.Equal(t, 201, code, "%v", out)
+	require.Eventually(t, func() bool { return recordOf(t, admin, h["record"]).State == "scheduled" }, 10*time.Second, 50*time.Millisecond)
+	require.Eventually(t, func() bool { return recordOf(t, admin, h["record"]).State == "active" }, 10*time.Second, 100*time.Millisecond,
+		"due: applied with its confirmation, checked again")
+	var used int
+	require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".authz_confirmation WHERE target = $1 AND consumed_by_change IS NOT NULL",
+		h["record"]).Scan(&used))
+	assert.Equal(t, 1, used, "used when it applied, not when it was scheduled")
+
+	// a confirmer rejects a pending one (row 7)
+	r := submitChange(t, w, sectest.Alice, unitReq("pr4", root, "rejected", scope, ops), 202)
+	submitChange(t, w, sectest.Bob, map[string]any{"change_key": "pr5", "direction": "tighten", "termination": "reject",
+		"target": r["record"], "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}, 200)
+	assert.Equal(t, "rejected", recordOf(t, admin, r["record"]).EndReason)
+
+	// a signature that does not verify is no confirmation; nor does one stretch how long a confirmation holds
+	p := submitChange(t, w, sectest.Alice, unitReq("pr6", root, "forged", scope, ops), 202)
+	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/confirmations", map[string]any{"target": p["record"],
+		"basis": "deployment_owner", "expires_at": time.Now().Add(100 * time.Hour).UTC().Format("2006-01-02T15:04:05.000000Z"),
+		"signature": "AAAA"})
+	require.Equal(t, 400, code, "beyond the 72 hours a confirmation holds: %v", out)
+	// the applicant is no confirmer of her own request: her "rejection" is refused (she withdraws instead)
+	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/changes", map[string]any{"change_key": "pr10", "direction": "tighten",
+		"termination": "reject", "target": p["record"], "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}})
+	require.Equal(t, 403, code, "%v", out)
+	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/confirmations", map[string]any{"target": p["record"],
+		"basis": "deployment_owner", "expires_at": time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05.000000Z"),
+		"signature": "AAAA"})
+	require.Equal(t, 403, code, "%v", out)
+
+	// Bob asks for a unit, then loses his admin holding before Alice confirms it: checked again, rejected (CP67)
+	b := submitChange(t, w, sectest.Bob, unitReq("pr7", root, "bobs", scope, ops), 202)
+	byOwner := ownerConfirm(t, w, sectest.Alice, bobAdmin["record"], "1")
+	rv := tightenReq("pr8", bobAdmin["record"])
+	rv["confirmation_ids"] = []any{byOwner["id"]}
+	submitChange(t, w, sectest.Alice, rv, 200)
+	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/confirmations", map[string]any{"target": b["record"]})
+	require.Equal(t, 201, code, "%v", out)
+	require.Eventually(t, func() bool { return recordOf(t, admin, b["record"]).State == "ended" }, 10*time.Second, 50*time.Millisecond)
+	assert.Equal(t, recordState{State: "ended", EndReason: "rejected", Revision: 1, StateRev: 2, Reason: "PERMISSION_DENIED"},
+		recordOf(t, admin, b["record"]))
+	for _, id := range []any{p["record"]} {
+		submitChange(t, w, sectest.Alice, map[string]any{"change_key": "pr9", "direction": "tighten", "termination": "cancel",
+			"target": id, "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}, 200)
+	}
 }

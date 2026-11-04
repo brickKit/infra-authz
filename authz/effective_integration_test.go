@@ -42,8 +42,8 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 	ctx := context.Background()
 	ops := []string{"demo.order.read"}
 	require.Empty(t, segmentsOf(carol), "the precondition: carol holds no grant")
-	wide := submitChange(t, w, sectest.Alice, unitReq("ef1", root, "wide", []sdkauthz.Segment{orderSeg(region("east", "west", "north"))}, ops), 200)
-	sub := submitChange(t, w, sectest.Alice, unitReq("ef2", wide["record"], "wide-sub", []sdkauthz.Segment{orderSeg(region("east", "west"))}, ops), 200)
+	wide := protect(t, w, sectest.Alice, unitReq("ef1", root, "wide", []sdkauthz.Segment{orderSeg(region("east", "west", "north"))}, ops))
+	sub := protect(t, w, sectest.Alice, unitReq("ef2", wide["record"], "wide-sub", []sdkauthz.Segment{orderSeg(region("east", "west"))}, ops))
 	g := submitChange(t, w, sectest.Alice, grantReq("ef3", sub["record"], carol, []sdkauthz.Segment{orderSeg(region("east", "west"))}), 200)
 	assert.Equal(t, [][]string{{"east", "west"}}, regionsOf(segmentsOf(carol)))
 
@@ -54,7 +54,7 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 		submitChange(t, w, sectest.Alice, map[string]any{"change_key": key, "direction": "tighten", "target": wide["record"],
 			"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 200)
 	}
-	bobs := submitChange(t, w, sectest.Alice, holdingReq("efh", sub["record"], sectest.Bob), 200)
+	bobs := protect(t, w, sectest.Alice, holdingReq("efh", sub["record"], sectest.Bob))
 	// the parent narrows: the grant keeps its segments, the view gives the intersection at once; the closure job then
 	// marks it partly outside, to be reviewed, still effective (security 08's closure)
 	narrowWide("ef4", "east", "north")
@@ -72,11 +72,12 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 	assert.Empty(t, segmentsOf(carol), "{east, west} ∩ {north}: empty")
 	require.Eventually(t, func() bool { return recordOf(t, admin, g["record"]).State == "ended" }, 10*time.Second,
 		100*time.Millisecond, "the closure job keeps the books")
-	assert.Equal(t, recordState{State: "ended", EndReason: "source_narrowed", Revision: 1, StateRev: 2}, recordOf(t, admin, sub["record"]))
+	// a protected unit: awaiting its confirmation (1), active (2), ended (3)
+	assert.Equal(t, recordState{State: "ended", EndReason: "source_narrowed", Revision: 1, StateRev: 3}, recordOf(t, admin, sub["record"]))
 	assert.Equal(t, recordState{State: "ended", EndReason: "source_ended", Revision: 1, StateRev: 2}, recordOf(t, admin, g["record"]))
 	require.Eventually(t, func() bool { return recordOf(t, admin, bobs["record"]).State == "ended" }, 10*time.Second, 100*time.Millisecond)
 	assert.Equal(t, "source_ended", recordOf(t, admin, bobs["record"]).EndReason, "a holding in a unit that ended")
-	assert.Equal(t, recordState{State: "active", Revision: 3, StateRev: 3}, recordOf(t, admin, wide["record"]), "within the root")
+	assert.Equal(t, recordState{State: "active", Revision: 3, StateRev: 4}, recordOf(t, admin, wide["record"]), "within the root")
 
 	// a permission key its owner's definitions no longer have gives nothing, the grant unchanged
 	conn := dial(t, w, "demo/invoices")
@@ -121,13 +122,13 @@ func testSources(t *testing.T, w *sectest.World, admin *pgx.Conn, root string, s
 
 	// a unit renewed wider is a new record superseding the old: what names the old one is under the new (its closure
 	// finds them still within, nothing ends), and a grant naming the old ID is proved against the new limit
-	old := submitChange(t, w, sectest.Alice, unitReq("efs", root, "renewable", []sdkauthz.Segment{orderSeg(region("east"))},
-		[]string{"demo.order.read"}), 200)
+	old := protect(t, w, sectest.Alice, unitReq("efs", root, "renewable", []sdkauthz.Segment{orderSeg(region("east"))},
+		[]string{"demo.order.read"}))
 	under := submitChange(t, w, sectest.Alice, grantReq("efs1", old["record"], carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
-	submitChange(t, w, sectest.Alice, holdingReq("efsh", old["record"], sectest.Bob), 200)
-	renewed := submitChange(t, w, sectest.Alice, widenReq("efs2", "management_unit", map[string]any{"name": "renewable", "parent": root,
+	protect(t, w, sectest.Alice, holdingReq("efsh", old["record"], sectest.Bob))
+	renewed := protect(t, w, sectest.Alice, widenReq("efs2", "management_unit", map[string]any{"name": "renewable", "parent": root,
 		"managed_scope": []sdkauthz.Segment{orderSeg(region("east", "west"))}, "grantable_operations": []string{"demo.order.read"},
-		"predecessor": old["record"]}), 200)
+		"predecessor": old["record"]}))
 	assert.Equal(t, "superseded", recordOf(t, admin, old["record"]).EndReason)
 	require.Eventually(t, func() bool {
 		var st string
@@ -167,8 +168,8 @@ func testSources(t *testing.T, w *sectest.World, admin *pgx.Conn, root string, s
 
 	// an index that cannot say who is affected is not "nobody": the closure scans, and the source domain is marked
 	// for review
-	other := submitChange(t, w, sectest.Alice, unitReq("efx", root, "other", []sdkauthz.Segment{orderSeg(region("east", "west"))},
-		[]string{"demo.order.read"}), 200)
+	other := protect(t, w, sectest.Alice, unitReq("efx", root, "other", []sdkauthz.Segment{orderSeg(region("east", "west"))},
+		[]string{"demo.order.read"}))
 	_, err := admin.Exec(ctx, "UPDATE "+itSchema+".authz_dependency_index SET complete = false WHERE kind = 'management_unit'")
 	require.NoError(t, err)
 	t.Cleanup(func() {

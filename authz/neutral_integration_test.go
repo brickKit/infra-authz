@@ -73,7 +73,7 @@ func testNeutral(t *testing.T, w *sectest.World, admin *pgx.Conn, root, east str
 	assert.Contains(t, submitChange(t, w, sectest.Alice, narrow, 400)["detail"], "not within the record")
 
 	// an ended record keeps its name: the start state is stale (row 4)
-	gone := submitChange(t, w, sectest.Alice, unitReq("n5", root, "short-lived", []sdkauthz.Segment{orderSeg(region("east"))}, []string{}), 200)
+	gone := protect(t, w, sectest.Alice, unitReq("n5", root, "short-lived", []sdkauthz.Segment{orderSeg(region("east"))}, []string{}))
 	submitChange(t, w, sectest.Alice, tightenReq("n5r", gone["record"]), 200)
 	late := map[string]any{"name": "too late", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region("east"))}, "grantable_operations": []string{}}
 	raw, _ := json.Marshal(late)

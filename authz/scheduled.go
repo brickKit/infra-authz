@@ -26,6 +26,7 @@ const JobDue = "infra.authz.due"
 const (
 	triggerScheduled = "scheduled"
 	triggerRestore   = "restore"
+	triggerConfirmed = "confirmed" // a saved widening whose confirmations are complete (T5c)
 )
 
 // MaxProcessingWait is how long a job waits on "processing" before it goes to an operator (security 08's parameter
@@ -52,6 +53,8 @@ func (a firing) from() string {
 		return "scheduled"
 	case triggerRestore:
 		return "held"
+	case triggerConfirmed:
+		return "awaiting_confirmation"
 	}
 	return ""
 }
