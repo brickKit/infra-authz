@@ -119,6 +119,7 @@ func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/records", Operation: OpRead, Handle: m.recordsHTTP})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/dispositions", Operation: OpDispose, Handle: m.disposeHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/dispositions", Operation: OpDispRead, Handle: m.dispositionsHTTP})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/dispositions/:id/release", Operation: OpRelease, Handle: m.releaseHTTP})
 	return nil
 }
 

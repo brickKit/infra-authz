@@ -43,6 +43,7 @@ const (
 
 type confirmIn struct {
 	Target           string       `json:"target"`
+	Disposition      string       `json:"disposition,omitempty"` // a disposition's release (release.go): its revision in expected_revision
 	ExpectedRevision *revisionRef `json:"expected_revision,omitempty"`
 	Basis            string       `json:"basis,omitempty"`      // holding (the default) or deployment_owner
 	ExpiresAt        string       `json:"expires_at,omitempty"` // an owner's confirmation: as signed
@@ -53,6 +54,24 @@ func (m *Module) confirmHTTP(c *httpx.Context) error {
 	var in confirmIn
 	if err := c.BindJSON(&in); err != nil {
 		return err
+	}
+	if in.Disposition != "" { // a release's confirmation: under the release operation
+		s, _ := sdkauthz.From(c.Ctx())
+		ctx, _, err := s.Check(c.Ctx(), OpRelease, sdkauthz.Facts{})
+		if err != nil {
+			return err
+		}
+		u, _ := identity.UserFrom(ctx)
+		var id string
+		var until time.Time
+		err = m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
+			id, until, err = m.confirmDisposition(ctx, tx, u.Subject, in)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		return c.JSON(201, map[string]any{"id": id, "expires_at": canon.Time(until)})
 	}
 	ctx, u, err := m.admitConfirmation(c, in.Target)
 	if err != nil {
@@ -68,6 +87,29 @@ func (m *Module) confirmHTTP(c *httpx.Context) error {
 // ownerPayloadHTTP answers what the deployment owner signs for a target (sdkauthz.OwnerConfirmation): signing tools
 // and seeds ask it, sign offline, and confirm. It tells nothing a confirmer could not read.
 func (m *Module) ownerPayloadHTTP(c *httpx.Context) error {
+	if id := c.Query("disposition"); id != "" { // a release's: the disposition at its revision
+		s, _ := sdkauthz.From(c.Ctx())
+		ctx, _, err := s.Check(c.Ctx(), OpRelease, sdkauthz.Facts{})
+		if err != nil {
+			return err
+		}
+		var o sdkauthz.OwnerConfirmation
+		err = m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
+			d, err := lockDisposition(ctx, tx, id)
+			if err == nil && (d == nil || d.State != "active") {
+				err = errs.New(errs.ReasonRequestInvalid, "no active disposition "+id)
+			}
+			if err == nil {
+				o, _ = m.dispositionBinding(d)
+			}
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		return c.JSON(200, map[string]any{"deployment": o.Deployment, "target": o.Target, "expires_at": o.ExpiresAt,
+			"expected_revision": o.ExpectedRevision})
+	}
 	in := confirmIn{Target: c.Query("target")}
 	if v := c.Query("expected_revision"); v != "" {
 		in.ExpectedRevision = &revisionRef{Domain: contentDomain, Value: v}
@@ -353,7 +395,7 @@ func (m *Module) judgeConfirmation(ctx context.Context, tx db.Tx, id string, t *
 		Digest                   *string
 		Live                     bool
 	}
-	err := tx.QueryRow(ctx, `SELECT target::text, confirmer, basis, expected_revision, candidate_digest,
+	err := tx.QueryRow(ctx, `SELECT coalesce(target::text, ''), confirmer, basis, expected_revision, candidate_digest,
 			consumed_by_change IS NULL AND expires_at > now() FROM authz_confirmation WHERE id::text = $1 FOR UPDATE`, id).
 		Scan(&c.Target, &c.Confirmer, &c.Basis, &c.Revision, &c.Digest, &c.Live)
 	switch {

@@ -109,6 +109,9 @@ func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change st
 	if p.disp != nil {
 		return m.dispose(ctx, tx, e, p, change)
 	}
+	if p.release != nil {
+		return m.release(ctx, tx, e, p, change)
+	}
 	var res changeResult
 	var id string
 	var stateRev int64

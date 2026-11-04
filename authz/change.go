@@ -35,6 +35,8 @@ type request struct {
 	ActingAs              string          `json:"acting_as,omitempty"`
 	ConfirmationIDs       []string        `json:"confirmation_ids,omitempty"`
 	Reason                string          `json:"reason,omitempty"`
+	// Release: a release of a security disposition (09a's disposition_release, release.go)
+	Release *releaseIn `json:"release,omitempty"`
 }
 
 // revisionRef is 09a's RevisionRef as this member numbers a record: its state revision and its content revision.
@@ -84,6 +86,8 @@ func (e entry) operation() string {
 		return OpRelinquish
 	case isDisposition(e.req.Candidate):
 		return OpDispose
+	case e.req.Release != nil:
+		return OpRelease
 	case e.req.Direction == Tighten:
 		return OpTighten
 	}
@@ -110,8 +114,9 @@ type plan struct {
 	basis map[string]any
 	// coolingOff: a protected widening the owner alone confirmed, waiting until then (cooling.go)
 	coolingOff *time.Time
-	// disp: a new security disposition (disposition.go)
-	disp *plannedDisposition
+	// disp: a new security disposition (disposition.go); release: a disposition's release (release.go)
+	disp    *plannedDisposition
+	release *plannedRelease
 }
 
 // change runs one user change at the effect point.

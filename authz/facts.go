@@ -74,6 +74,8 @@ func (m *Module) factsOf(ctx context.Context, tx db.Tx, e entry) (facts, plan, *
 	switch {
 	case e.job != nil:
 		structural, pre, err = m.fired(ctx, tx, e, s, &f, &p)
+	case e.req.Release != nil:
+		structural, pre, err = m.releasing(ctx, tx, e, s, &f, &p)
 	case e.req.Direction == Widen && e.req.Target == "":
 		structural, pre, err = m.submitted(ctx, tx, e, s, &f, &p)
 	case e.req.Target != "":
@@ -205,7 +207,7 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 // again (D36: a grantor stepping down does not undo an effective grant).
 func (m *Module) restoring(t *target, s standing, f *facts, p *plan) (bool, *changeResult, error) {
 	f.Kind, p.target, p.restore, p.recType, f.Eligible = RestoreUncomputable, t, true, t.Type, proven
-	if t.HoldReason != "uncomputable" {
+	if t.HoldReason != "uncomputable" && t.HoldReason != "restore_pending" { // restore_pending: a release kept it (T6b)
 		f.FromState = false
 		return true, nil, nil
 	}

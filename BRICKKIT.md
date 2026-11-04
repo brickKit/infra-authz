@@ -19,10 +19,10 @@
 
 身份来源停住时，收紧（撤销、收窄、终止尚未生效的记录）照常可以办理（安全 03 的只减少访问的操作）：请求者的资格按身份来源最后已应用的事实判断，来源水位的年龄在 `AUTHZ_T_TIGHT`（起始 1 小时）内一个人办理，超过后、或来源发现回退时，要另一名授权管理员（资格同样按最后已应用的事实判断）或部署所有者确认；结果带 `basis: last_applied`，审计标明“依据未证明为最新”。对象是授权管理员的持有资格、或这样的持有资格所在的管理单元时，不按旧事实办理：请求者或确认人要此刻可证明，否则答处理中。放宽在来源停住时一律不办理。
 
-安全处置（安全 08，3.0.20 起）：有处置权限的管理者在自己管理的治理单元内，暂停一个人在一组段范围内的访问（`POST /api/authz/dispositions`）：他在这个单元及其下级治理的、与范围相交的授予，以及他在这里的管理持有资格转为暂停；处置生效期间，他的任何段（新授予、续期、为他新建的记录都一样）只要与暂停的范围相交，整段不进视图。范围要在单元的管理上限之内；暂停一个人的全部段只能在根单元做。处置其他授权管理员是受保护的收紧。处置的解除随后的版本做。
+安全处置（安全 08，3.0.20 起）：有处置权限的管理者在自己管理的治理单元内，暂停一个人在一组段范围内的访问（`POST /api/authz/dispositions`）：他在这个单元及其下级治理的、与范围相交的授予，以及他在这里的管理持有资格转为暂停；处置生效期间，他的任何段（新授予、续期、为他新建的记录都一样）只要与暂停的范围相交，整段不进视图。范围要在单元的管理上限之内；暂停一个人的全部段只能在根单元做。处置其他授权管理员是受保护的收紧。解除（`POST /api/authz/dispositions/{id}/release`）是一次变更：处置仍暂停的记录一起恢复，没剩下有效段的转为待恢复、由本组件之后重试，处置转为已解除；能处置这个治理域的人才能解除（被处置的人自己不行，下级单元的管理者不行）；解除授权管理员的处置是受保护的放宽，确认绑定处置与它的修订。
 
 3.0.20 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
-- 处置的解除、身份侧冻结派生的处置；
+- 身份侧冻结派生的处置；
 - 严格路径（A、B 档）；
 - 成员切换；
 - 共享、委托与扮演；
@@ -86,6 +86,7 @@
   | `POST /api/authz/relinquishments` | `infra.authz.security_record.relinquish` | 放弃自己的一整条授予或管理持有资格（D82）：谁也不用授予，本组件给每个持有者一段固定的段 |
   | `POST /api/authz/dispositions` | `infra.authz.security_disposition.dispose`（只减少访问） | 安全处置：`change_key`、`subject`、`domain`（管理单元，缺省为根）、`suspended_segments` 或 `all_scope: true`（只在根）、受保护时的 `confirmation_ids`；回答同变更结果，`record` 是处置的身份 |
   | `GET /api/authz/dispositions` | `infra.authz.security_disposition.read` | 处置的列表 |
+  | `POST /api/authz/dispositions/{id}/release` | `infra.authz.security_disposition.release` | 解除：`change_key`、`disposition_revision`、受保护时的 `confirmation_ids`（确认用 `POST /api/authz/confirmations` 的 `disposition` 与 `expected_revision`，所有者待签内容用 `?disposition=`） |
   | `GET /api/authz/records?type=` | `infra.authz.security_record.read` | 调用者看得到的有效安全记录：管理者看全部，持有者只看自己的（维度 `holder`） |
 
 两个生效点路由的请求体都是安全 09a 的 `be.security.change_request`（`requested_by` 与触发方式由本组件从令牌得出，不在请求里）；`tighten` 只发往 `/api/authz/tightenings`，发往 `/api/authz/changes` 的答 `REQUEST_INVALID`。收紧可带 `confirmation_ids`（受保护的收紧与两人规则要先确认）。管理者的授予要同时有 `.change` 与 `.tighten`：

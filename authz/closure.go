@@ -281,7 +281,7 @@ func (m *Module) keepBooks(ctx context.Context, tx db.Tx, w sources, id string, 
 	v := assess(t, w)
 	switch {
 	case v.state == "held" && t.State == "held": // held already, still not computable
-	case v.state == "" && t.State == "held" && t.HoldReason == "uncomputable":
+	case v.state == "" && t.State == "held" && (t.HoldReason == "uncomputable" || t.HoldReason == "restore_pending"):
 		// computable again: its restore is the effect point's, under a derived key with this state revision
 		if _, err := m.rt.Work.Enqueue(ctx, tx, JobDue, firing{Record: id, StateRevision: t.StateRevision,
 			Trigger: triggerRestore}); err != nil {
