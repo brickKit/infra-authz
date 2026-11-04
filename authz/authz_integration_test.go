@@ -340,6 +340,7 @@ func TestMemberEndToEnd(t *testing.T) {
 		}
 		return len(subjects[p].Segments) > 0
 	})
+	testNeutral(t, w, admin, root, eastID)
 
 	// T3: the identity member's account status reaches the views (security 03's internal sources; P8.25)
 	again4 := submitChange(t, w, sectest.Alice, grantReq("b4", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)

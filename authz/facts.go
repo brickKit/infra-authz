@@ -337,6 +337,18 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 				}
 			}
 		}
+	case req.Direction == Neutral: // a display name: a new content revision, no access changes (security 08)
+		f.Kind = Neutral
+		f.FromState = t.State != "ended"
+		if req.CandidateDigest != candidateDigest(t.Type, req.Candidate) {
+			return false, invalid("candidate_digest is not the candidate's digest"), nil
+		}
+		renamed, ok := renames(t, req.Candidate)
+		if !ok {
+			return false, invalid("a neutral change changes only the name: a change of access is a tightening or a widening"), nil
+		}
+		// as for a tightening: the unit's managers; a role revision, or the root unit (no parent), an admin
+		structural, p.body = s.manages(unitOf) || (t.Type == "role_revision" || unitOf == "") && s.admin, renamed
 	default:
 		return false, invalid("direction " + req.Direction + " is not in this version for an existing record"), nil
 	}

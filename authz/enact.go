@@ -103,6 +103,19 @@ func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change st
 		if stateRev, err = m.transition(ctx, tx, id, "ended", p.endReason, "", change, ""); err != nil {
 			return res, err
 		}
+	case p.kind == Neutral: // a new content revision; the state revision stays, no access changed (no new security revision)
+		id = p.target.ID
+		body, _ := json.Marshal(p.body)
+		if err := tx.QueryRow(ctx, `UPDATE authz_record SET body = $2, revision = revision + 1, last_change = $3,
+			updated_at = now() WHERE id = $1 RETURNING state_revision`, id, body, change).Scan(&stateRev); err != nil {
+			return res, err
+		}
+		if err := m.audited(ctx, tx, e.requester, Neutral, p.target.Type, id, ""); err != nil {
+			return res, err
+		}
+		res.Outcome, res.Record = "applied", id
+		res.NewRevision = &revisionRef{Domain: stateDomain, Value: strconv.FormatInt(stateRev, 10)}
+		return res, nil
 	default: // a narrowing: a new content revision, the state kept
 		id = p.target.ID
 		body, _ := json.Marshal(p.body)

@@ -106,7 +106,8 @@ func narrows(t *target, raw json.RawMessage) (any, bool) {
 	case "management_unit":
 		var cur, next unitBody
 		_ = json.Unmarshal(t.Body, &cur)
-		if json.Unmarshal(raw, &next) != nil || next.Parent != cur.Parent || cur.Root || !coversAll(cur.ManagedScope, next.ManagedScope) {
+		if json.Unmarshal(raw, &next) != nil || next.Parent != cur.Parent || next.Name != cur.Name || cur.Root ||
+			!coversAll(cur.ManagedScope, next.ManagedScope) {
 			return nil, false
 		}
 		for _, op := range next.GrantableOperations {
@@ -117,4 +118,25 @@ func narrows(t *target, raw json.RawMessage) (any, bool) {
 		return next, true
 	}
 	return nil, false
+}
+
+// renames reads a neutral change's candidate: the same record with another name, nothing else changed. Only units
+// and role revisions have one.
+func renames(t *target, raw json.RawMessage) (any, bool) {
+	var cur, next map[string]any
+	if json.Unmarshal(t.Body, &cur) != nil || json.Unmarshal(raw, &next) != nil {
+		return nil, false
+	}
+	delete(next, "record_type")
+	name, _ := next["name"].(string)
+	if (t.Type != "management_unit" && t.Type != "role_revision") || name == "" || name == cur["name"] {
+		return nil, false
+	}
+	cur["name"] = name
+	a, _ := json.Marshal(cur)
+	b, _ := json.Marshal(next)
+	if string(a) != string(b) { // encoding/json sorts map keys: equal text is equal content
+		return nil, false
+	}
+	return json.RawMessage(a), true
 }

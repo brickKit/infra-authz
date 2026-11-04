@@ -32,10 +32,19 @@ func (m *Module) applied(ctx context.Context, tx db.Tx, requester, direction, ty
 	if err := tx.QueryRow(ctx, "SELECT security_revision FROM authz_state").Scan(&rev); err != nil {
 		return 0, err
 	}
+	return rev, m.audited(ctx, tx, requester, direction, typ, id, fmt.Sprint(rev))
+}
+
+// audited writes a security change's audit record in its transaction; rev is the security revision it advanced to
+// ("" for a neutral change, which advances none).
+func (m *Module) audited(ctx context.Context, tx db.Tx, requester, direction, typ, id, rev string) error {
+	changes := map[string]any{"direction": direction}
+	if rev != "" {
+		changes["security_revision"] = rev
+	}
 	_, err := m.rt.Audit.Write(ctx, tx, audit.Record{Category: audit.SecurityChange, Operation: OpChange,
-		Outcome: audit.Succeeded, Actor: requester, Target: map[string]any{"type": typ, "id": id},
-		Changes: map[string]any{"direction": direction, "security_revision": fmt.Sprint(rev)}})
-	return rev, err
+		Outcome: audit.Succeeded, Actor: requester, Target: map[string]any{"type": typ, "id": id}, Changes: changes})
+	return err
 }
 
 // within proves every candidate segment is contained in one of the unit's limit segments for its operation (security
