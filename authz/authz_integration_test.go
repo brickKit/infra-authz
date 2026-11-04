@@ -57,6 +57,7 @@ var orders = &sdkauthz.Definitions{Component: "demo/orders",
 const registryTSV = "kind\tkey\towner_component\n" +
 	"resource_type\tinfra.authz.security_record\tinfra/authz\nresource_type\tinfra.authz.system\tinfra/authz\n" +
 	"permission\tinfra.authz.security_record.read\tinfra/authz\npermission\tinfra.authz.security_record.change\tinfra/authz\n" +
+	"permission\tinfra.authz.security_record.tighten\tinfra/authz\n" +
 	"permission\tinfra.authz.security_record.relinquish\tinfra/authz\n" +
 	"permission\tinfra.authz.system.read\tinfra/authz\npermission\tinfra.authz.system.verify\tinfra/authz\n" +
 	"permission\tinfra.authz.system.submit\tinfra/authz\n" +
@@ -92,6 +93,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	testUncomputable(t, e.w, e.admin, e.root, e.segmentsOf)
 	testRelinquish(t, e.w, e.admin, e.root)
 	testConfirmations(t, e.w, e.admin, e.root)
+	e.staleTightening()
 	e.identity()
 	e.audited()
 }
@@ -164,6 +166,7 @@ func startE2E(t *testing.T) *e2e {
 		"PG_OWNER_USER": "postgres", "PG_OWNER_PASSWORD": pgPassword, "AUTHZ_INSTANCE": "authz-it-instance",
 		"AUTHZ_REGISTRY": registryTSV, "AUTHZ_BOOTSTRAP_ADMIN": sectest.Alice, "BUS_URL": busURL,
 		"IAM_GRPC_URL": "http://" + iamSystem, "IAM_COMPONENT": iamID, "AUTHZ_SOURCE_HIGH": "3s", "AUTHZ_SOURCE_READ": "6s",
+		"AUTHZ_T_TIGHT":   itTight.String(),
 		"AUTHZ_OWNER_KEY": ownerPublicPEM(t),
 		"AUTHZ_GRPC_URL":  "http://" + itSystem} { // the member guards its own user surface with its own view
 		env[k] = v
@@ -271,7 +274,7 @@ func (e *e2e) effectPoint() {
 	eastID := east["record"].(string)
 	protect(t, w, sectest.Alice, holdingReq("h1", eastID, sectest.Bob))
 	authzSegs := []sdkauthz.Segment{}
-	for _, op := range []string{OpRead, OpChange} {
+	for _, op := range []string{OpRead, OpChange, OpTighten} { // a manager: changes and tightenings (A125)
 		authzSegs = append(authzSegs, sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{Holder: {Kind: "all"}},
 			ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}})
 	}
@@ -567,9 +570,18 @@ func callAs(t *testing.T, bearer, method, path string, body any) (int, map[strin
 	return resp.StatusCode, out
 }
 
+// changePath is where a change request goes: a tightening to its own route (infra.authz.security_record.tighten),
+// everything else to the changes.
+func changePath(body map[string]any) string {
+	if body["direction"] == Tighten {
+		return "/api/authz/tightenings"
+	}
+	return "/api/authz/changes"
+}
+
 func submitChange(t *testing.T, w *sectest.World, who string, body map[string]any, want int) map[string]any {
 	t.Helper()
-	code, out := call(t, w, who, "POST", "/api/authz/changes", body)
+	code, out := call(t, w, who, "POST", changePath(body), body)
 	require.Equal(t, want, code, "%v: %v", body["change_key"], out)
 	return out
 }

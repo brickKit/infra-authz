@@ -24,7 +24,7 @@ func reject(reason, detail string) error {
 }
 
 // applied advances the security revision and writes the security change's audit record in the same transaction.
-func (m *Module) applied(ctx context.Context, tx db.Tx, requester, direction, typ, id string) (int64, error) {
+func (m *Module) applied(ctx context.Context, tx db.Tx, op, requester, direction, typ, id string, basis map[string]any) (int64, error) {
 	if err := advance(ctx, tx); err != nil {
 		return 0, err
 	}
@@ -32,17 +32,21 @@ func (m *Module) applied(ctx context.Context, tx db.Tx, requester, direction, ty
 	if err := tx.QueryRow(ctx, "SELECT security_revision FROM authz_state").Scan(&rev); err != nil {
 		return 0, err
 	}
-	return rev, m.audited(ctx, tx, requester, direction, typ, id, fmt.Sprint(rev))
+	return rev, m.audited(ctx, tx, op, requester, direction, typ, id, fmt.Sprint(rev), basis)
 }
 
-// audited writes a security change's audit record in its transaction; rev is the security revision it advanced to
-// ("" for a neutral change, which advances none).
-func (m *Module) audited(ctx context.Context, tx db.Tx, requester, direction, typ, id, rev string) error {
+// audited writes a security change's audit record in its transaction, under the operation op that admitted it; rev is the security revision it advanced to
+// ("" for a neutral change, which advances none); basis, when the requester was judged by the last applied facts:
+// "basis not proven latest" with the source as the judgement saw it (security 03).
+func (m *Module) audited(ctx context.Context, tx db.Tx, op, requester, direction, typ, id, rev string, basis map[string]any) error {
 	changes := map[string]any{"direction": direction}
 	if rev != "" {
 		changes["security_revision"] = rev
 	}
-	_, err := m.rt.Audit.Write(ctx, tx, audit.Record{Category: audit.SecurityChange, Operation: OpChange,
+	for k, v := range basis {
+		changes[k] = v
+	}
+	_, err := m.rt.Audit.Write(ctx, tx, audit.Record{Category: audit.SecurityChange, Operation: op,
 		Outcome: audit.Succeeded, Actor: requester, Target: map[string]any{"type": typ, "id": id}, Changes: changes})
 	return err
 }

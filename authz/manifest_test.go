@@ -16,6 +16,7 @@ var ownKeys = map[string]string{
 	"IAM_GRPC_URL":          "the identity member's system surface, $endpoint:<identity member>:grpc (config/vars.yaml): the account status is pulled and read there",
 	"IAM_COMPONENT":         "the identity member's component ID, e.g. infra/iam-casdoor (config/vars.yaml): the certificate it presents and the name of the account status source",
 	"AUTHZ_SOURCE_HIGH":     "D_src_high (security 03, D64): a duration; default 1m, at most 5m. Views that depend on the identity source stop renewing high-risk operations past this watermark age",
+	"AUTHZ_T_TIGHT":         "T_tight (security 03): a duration; default 1h. A tightening whose requester is judged by the last applied facts of the identity source is done by one person while the source's watermark is no older; beyond it, or on a stalled source, a second authorization admin or the deployment owner confirms",
 	"AUTHZ_SOURCE_READ":     "D_src_read (security 03, D64): a duration; default 10m, at most 1h, no shorter than AUTHZ_SOURCE_HIGH. Past this watermark age the views close for ordinary reads too",
 }
 

@@ -22,8 +22,8 @@ func testRelinquish(t *testing.T, w *sectest.World, admin *pgx.Conn, root string
 	mine := submitChange(t, w, sectest.Alice, grantReq("rl1", root, carol, seg), 200)
 	kept := submitChange(t, w, sectest.Alice, grantReq("rl2", root, carol, seg), 200) // she still holds one after
 	others := submitChange(t, w, sectest.Alice, grantReq("rl3", root, dave, seg), 200)
-	code, out := call(t, w, carol, "POST", "/api/authz/changes", tightenReq("rl4", mine["record"]))
-	require.Contains(t, []int{403, 404}, code, "the precondition: carol may not change security records (%v)", out)
+	code, out := call(t, w, carol, "POST", "/api/authz/tightenings", tightenReq("rl4", mine["record"]))
+	require.Contains(t, []int{403, 404}, code, "the precondition: carol may not tighten security records (%v)", out)
 
 	n := 0
 	relinquish := func(target any) (int, map[string]any) { // a new key each try: admission's refusal binds nothing

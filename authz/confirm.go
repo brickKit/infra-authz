@@ -96,13 +96,33 @@ func (m *Module) ownerPayloadHTTP(c *httpx.Context) error {
 	return c.JSON(200, out)
 }
 
+// admitConfirmation checks the operation a confirmation of target needs: a saved widening's is a change, which a
+// stale source's last view does not admit; a tightening's is a tightening, which it does (P8.29: the second person
+// of security 03's two-person rule confirms while the source is stopped).
 func (m *Module) admitConfirmation(c *httpx.Context, target string) (context.Context, string, error) {
 	s, _ := sdkauthz.From(c.Ctx())
 	facts, err := m.holderFacts(c.Ctx(), request{Target: target})
 	if err != nil {
 		return nil, "", err
 	}
-	ctx, _, err := s.Check(c.Ctx(), OpChange, facts)
+	op := OpTighten
+	if uuidText.MatchString(target) {
+		err = m.rt.DB.Tx(c.Ctx(), func(ctx context.Context, tx db.Tx) error {
+			var state string
+			err := tx.QueryRow(ctx, "SELECT state FROM authz_record WHERE id = $1", target).Scan(&state)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if state == "awaiting_confirmation" {
+				op = OpChange
+			}
+			return err
+		})
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	ctx, _, err := s.Check(c.Ctx(), op, facts)
 	if err != nil {
 		return nil, "", err
 	}
@@ -160,7 +180,17 @@ func (m *Module) confirm(ctx context.Context, confirmer string, in confirmIn) (s
 		basis, who := basisHolding, confirmer
 		switch in.Basis {
 		case "", basisHolding:
-			switch ok, err := m.confirmerEligible(ctx, tx, confirmer); {
+			units, err := m.units(ctx, tx)
+			if err != nil {
+				return err
+			}
+			affects, err := affectsAdmins(ctx, tx, units, t)
+			if err != nil {
+				return err
+			}
+			// a tightening that does not touch an admin's availability: the second person by the last applied facts
+			lastApplied := t.State != "awaiting_confirmation" && !affects
+			switch ok, err := m.confirmerEligible(ctx, tx, confirmer, lastApplied); {
 			case err != nil:
 				return err
 			case ok == unprovable:
@@ -227,14 +257,19 @@ func (m *Module) ownerKey() (ed25519.PublicKey, error) {
 	return key, nil
 }
 
-// confirmerEligible: an authorization admin (A123) whose account the identity source proves active now.
-func (m *Module) confirmerEligible(ctx context.Context, tx db.Tx, principal string) (proof, error) {
+// confirmerEligible: an authorization admin (A123) whose account the identity source proves active now; lastApplied,
+// or by the last applied facts (row 22's exemption: security 03's second person on a tightening that does not affect
+// an authorization admin's availability).
+func (m *Module) confirmerEligible(ctx context.Context, tx db.Tx, principal string, lastApplied bool) (proof, error) {
 	_, admin, err := holdingsOf(ctx, tx, principal)
 	if err != nil || !admin {
 		return disproven, err
 	}
-	acct, _, _, err := m.accountOf(ctx, tx, principal)
-	return acct, err
+	a, err := m.accountOf(ctx, tx, principal)
+	if lastApplied && a.now == unprovable && a.last && !a.quarantined {
+		return proven, err
+	}
+	return a.now, err
 }
 
 // confirmationsOf judges the confirmations of a change against its target (security 08, rows 22-24). A confirmation does
@@ -248,7 +283,7 @@ func (m *Module) confirmerEligible(ctx context.Context, tx db.Tx, principal stri
 //
 // ids are the ones to mark used when the change applies.
 func (m *Module) confirmationsOf(ctx context.Context, tx db.Tx, list []string, t *target, requester, object string,
-	f *facts) ([]string, error) {
+	lastApplied bool, f *facts) ([]string, error) {
 	widening := t.State == "awaiting_confirmation" || t.State == "scheduled" // a saved widening, effective later or not
 	if widening {
 		rows, err := tx.Query(ctx, `SELECT id::text FROM authz_confirmation WHERE target = $1 AND consumed_by_change IS NULL
@@ -265,7 +300,7 @@ func (m *Module) confirmationsOf(ctx context.Context, tx db.Tx, list []string, t
 	}
 	var holding, invalid, unprovableIDs []string
 	for _, id := range list {
-		switch st, err := m.judgeConfirmation(ctx, tx, id, t, widening, requester, object); {
+		switch st, err := m.judgeConfirmation(ctx, tx, id, t, widening, requester, object, !widening && lastApplied); {
 		case err != nil:
 			return nil, err
 		case st == proven:
@@ -292,7 +327,7 @@ func (m *Module) confirmationsOf(ctx context.Context, tx db.Tx, list []string, t
 // judgeConfirmation is one confirmation: proven (it holds), unprovable (its confirmer cannot be proven eligible now),
 // or disproven (it does not hold).
 func (m *Module) judgeConfirmation(ctx context.Context, tx db.Tx, id string, t *target, widening bool, requester,
-	object string) (proof, error) {
+	object string, lastApplied bool) (proof, error) {
 	var c struct {
 		Target, Confirmer, Basis string
 		Revision                 *int64
@@ -327,7 +362,7 @@ func (m *Module) judgeConfirmation(ctx context.Context, tx db.Tx, id string, t *
 	if c.Confirmer == requester || c.Confirmer == object {
 		return disproven, nil
 	}
-	return m.confirmerEligible(ctx, tx, c.Confirmer)
+	return m.confirmerEligible(ctx, tx, c.Confirmer, lastApplied)
 }
 
 // othersAvailable: an authorization admin other than the requester and the object whose account is provably active.
@@ -343,8 +378,8 @@ func (m *Module) othersAvailable(ctx context.Context, tx db.Tx, requester, objec
 		return false, err
 	}
 	for _, o := range others {
-		if acct, _, _, err := m.accountOf(ctx, tx, o); err != nil || acct == proven {
-			return acct == proven, err
+		if a, err := m.accountOf(ctx, tx, o); err != nil || a.now == proven {
+			return a.now == proven, err
 		}
 	}
 	return false, nil

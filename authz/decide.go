@@ -62,10 +62,14 @@ type facts struct {
 	// Rejection: the termination is a confirmer's rejection (row 9 holds it when the confirmer is not provable); a
 	// manager's cancellation is checked like any tightening.
 	Rejection bool
-	// The requester: eligible now; quarantined; eligible by the last applied facts.
+	// The requester: eligible now; quarantined; eligible by the last applied facts, and whether those need a second
+	// person (security 03: the source's watermark older than T_tight, none, or the source stalled)
 	Eligible    proof
 	Quarantined bool
 	LastApplied bool
+	BeyondTight bool
+	// Basis is not decided on: a change applied on the last applied facts says so in its audit (security 03)
+	Basis map[string]any
 	// AffectsAdmins: the change affects an authorization admin holding's availability (or the index is incomplete).
 	AffectsAdmins bool
 	Confirmation  string
@@ -163,7 +167,8 @@ func decide(f facts) verdict {
 		return verdict{19, outRejected, "CONTAINMENT_NOT_PROVEN"}
 	case f.Kind == Widen && f.NeedsConfirmation && f.Confirmation == confirmNone:
 		return verdict{20, outAwaitingSaved, "CONFIRMATION_REQUIRED"}
-	case in(f.Kind, Tighten, RestoreHold) && f.TightenNeedsConfirmation && f.Confirmation == confirmNone:
+	case in(f.Kind, Tighten, RestoreHold) && (f.TightenNeedsConfirmation || f.Eligible != proven && f.BeyondTight) &&
+		f.Confirmation == confirmNone:
 		return verdict{21, outAwaitingUnsaved, "CONFIRMATION_REQUIRED"}
 	case in(f.Kind, Widen, Tighten, RestoreHold) && f.Confirmation != confirmNone && !f.ConfirmersProvable:
 		return verdict{22, outProcessing, "ADMIN_AVAILABILITY_UNPROVABLE"}

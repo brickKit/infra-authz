@@ -144,3 +144,43 @@ func renames(t *target, raw json.RawMessage) (any, bool) {
 	}
 	return json.RawMessage(a), true
 }
+
+// affectsAdmins: a tightening of t touches an authorization admin holding's availability (security 03; security 08's
+// dependency index): t is such a holding, or the management unit one sits in, or a unit above it. A requester judged
+// by the last applied facts does not act alone on these (row 12), and their confirmers are proven now (row 22).
+func affectsAdmins(ctx context.Context, tx db.Tx, units map[string]unitBody, t *target) (bool, error) {
+	switch t.Type {
+	case "management_holding":
+		var h holdingBody
+		_ = json.Unmarshal(t.Body, &h)
+		return h.SystemRole == "authorization_admin", nil
+	case "management_unit":
+		recs, err := active(ctx, tx, "management_holding")
+		if err != nil {
+			return false, err
+		}
+		for _, r := range recs {
+			var h holdingBody
+			if err := json.Unmarshal(r.Body, &h); err != nil {
+				return false, err
+			}
+			if h.SystemRole != "authorization_admin" {
+				continue
+			}
+			// up the parent chain from the holding's unit; a chain longer than the units is broken: count it as touched
+			u := h.Unit
+			for range len(units) + 1 {
+				if sameUnit(units, u, t.ID) {
+					return true, nil
+				}
+				if u = units[u].Parent; u == "" {
+					break
+				}
+			}
+			if u != "" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}

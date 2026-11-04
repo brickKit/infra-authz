@@ -136,7 +136,7 @@ func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change st
 			updated_at = now() WHERE id = $1 RETURNING state_revision`, id, body, change).Scan(&stateRev); err != nil {
 			return res, err
 		}
-		if err := m.audited(ctx, tx, e.requester, Neutral, p.target.Type, id, ""); err != nil {
+		if err := m.audited(ctx, tx, e.operation(), e.requester, Neutral, p.target.Type, id, "", p.basis); err != nil {
 			return res, err
 		}
 		res.Outcome, res.Record = "applied", id
@@ -177,9 +177,12 @@ func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change st
 	if err := useConfirmations(ctx, tx, p.confirmed, change); err != nil {
 		return res, err
 	}
-	rev, err := m.applied(ctx, tx, e.requester, e.req.Direction, p.recTypeOr(), id)
+	rev, err := m.applied(ctx, tx, e.operation(), e.requester, e.req.Direction, p.recTypeOr(), id, p.basis)
 	if err != nil {
 		return res, err
+	}
+	if p.basis != nil {
+		res.Basis = "last_applied"
 	}
 	res.Outcome, res.Record = "applied", id
 	res.NewRevision = &revisionRef{Domain: stateDomain, Value: strconv.FormatInt(stateRev, 10)}

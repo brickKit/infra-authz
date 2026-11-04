@@ -37,9 +37,9 @@ type Module struct {
 	reg     registry
 
 	// accounts is the identity member's account status, kept with its watermark; srcHigh and srcRead are D_src_high
-	// and D_src_read
-	accounts         *projection.Watermarked
-	srcHigh, srcRead time.Duration
+	// and D_src_read, tight is T_tight (security 03)
+	accounts                *projection.Watermarked
+	srcHigh, srcRead, tight time.Duration
 }
 
 // New builds the module from its runtime.
@@ -58,6 +58,9 @@ func New(rt *runtime.Runtime) (*Module, error) {
 		return nil, errs.New(errs.ReasonRequestInvalid, fmt.Sprintf(
 			"AUTHZ_SOURCE_HIGH (%s) is above zero and at most %s; AUTHZ_SOURCE_READ (%s) is no shorter and at most %s",
 			m.srcHigh, MaxSourceHigh, m.srcRead, MaxSourceRead))
+	}
+	if m.tight = rt.Config.Duration("AUTHZ_T_TIGHT"); m.tight <= 0 {
+		return nil, errs.New(errs.ReasonRequestInvalid, fmt.Sprintf("AUTHZ_T_TIGHT (%s) is above zero", m.tight))
 	}
 	iam := rt.Config.String("IAM_COMPONENT")
 	conn, ok := rt.GRPCAt(iam, rt.Config.String("IAM_GRPC_URL"))
@@ -106,25 +109,60 @@ func (m *Module) Services(s *grpcx.Services) error {
 // Routes registers the user surface: the effect point and the records, guarded by this member's own view.
 func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/changes", Operation: OpChange, Handle: m.changeHTTP})
-	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/confirmations", Operation: OpChange, Handle: m.confirmHTTP})
-	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/confirmations/owner-payload", Operation: OpChange, Handle: m.ownerPayloadHTTP})
-	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/changes/:key", Operation: OpChange, Handle: m.changeByKey})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/tightenings", Operation: OpTighten, Handle: m.tightenHTTP})
+	// admitted like a tightening (a stale source's last view does); the handler checks the operation the target needs:
+	// a saved widening's confirmation is a change, a tightening's a tightening
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/confirmations", Operation: OpTighten, Handle: m.confirmHTTP})
+	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/confirmations/owner-payload", Operation: OpTighten, Handle: m.ownerPayloadHTTP})
+	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/changes/:key", Operation: OpRelinquish, Handle: m.changeByKey})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/relinquishments", Operation: OpRelinquish, Handle: m.relinquishHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/records", Operation: OpRead, Handle: m.recordsHTTP})
 	return nil
 }
 
+// changeHTTP takes widenings and neutral changes; a tightening goes to tightenHTTP, under its own operation.
 func (m *Module) changeHTTP(c *httpx.Context) error {
 	s, _ := sdkauthz.From(c.Ctx())
 	var in request
 	if err := c.BindJSON(&in); err != nil {
 		return err
 	}
+	if in.Direction == Tighten {
+		return errs.New(errs.ReasonRequestInvalid, "a tightening goes to POST /api/authz/tightenings ("+OpTighten+")")
+	}
 	facts, err := m.holderFacts(c.Ctx(), in)
 	if err != nil {
 		return err
 	}
 	ctx, _, err := s.Check(c.Ctx(), OpChange, facts)
+	if err != nil {
+		return err
+	}
+	u, _ := identity.UserFrom(ctx)
+	res, err := m.change(ctx, u.Subject, in)
+	if err != nil {
+		return err
+	}
+	return answer(c, res)
+}
+
+// tightenHTTP takes a tightening of an existing record: a revocation, a narrowing, or ending one not yet effective.
+// The operation is tightening_only: admitted on a stale source's last view (P8.29), the requester judged at the effect
+// point by the last applied facts within T_tight, with a second person beyond (security 03, A125).
+func (m *Module) tightenHTTP(c *httpx.Context) error {
+	s, _ := sdkauthz.From(c.Ctx())
+	var in request
+	if err := c.BindJSON(&in); err != nil {
+		return err
+	}
+	if in.Direction != Tighten || in.Target == "" {
+		return errs.New(errs.ReasonRequestInvalid, "a tightening is direction tighten on its target")
+	}
+	facts, err := m.holderFacts(c.Ctx(), in)
+	if err != nil {
+		return err
+	}
+	ctx, _, err := s.Check(c.Ctx(), OpTighten, facts)
 	if err != nil {
 		return err
 	}
@@ -213,13 +251,17 @@ func answer(c *httpx.Context, res changeResult) error {
 func (m *Module) changeByKey(c *httpx.Context) error {
 	s, _ := sdkauthz.From(c.Ctx())
 	u, _ := identity.UserFrom(c.Ctx())
-	// the key is in the caller's own namespace: those who may change records, or relinquish their own, may ask
+	// the key is in the caller's own namespace: those who may change or tighten records, or relinquish their own, may ask
 	own := sdkauthz.Facts{Holder: {State: "value", Value: u.Subject}}
-	ctx, _, err := s.Check(c.Ctx(), OpChange, own)
-	if err != nil {
-		if ctx, _, err = s.Check(c.Ctx(), OpRelinquish, own); err != nil {
-			return err
+	var ctx context.Context
+	var err error
+	for _, op := range []string{OpChange, OpTighten, OpRelinquish} {
+		if ctx, _, err = s.Check(c.Ctx(), op, own); err == nil {
+			break
 		}
+	}
+	if err != nil {
+		return err
 	}
 	key := c.Param("key")
 	var bound []byte
@@ -331,7 +373,7 @@ func (m *Module) claim(ctx context.Context, tx db.Tx) error {
 	}{
 		{root, "management_unit", unitBody{Name: "deployment", Root: true}},
 		{holding, "management_holding", holdingBody{Unit: root, Holder: m.bootstrap, SystemRole: "authorization_admin"}},
-		{grant, "grant", grantBody{Grantee: m.bootstrap, Segments: []sdkauthz.Segment{seg(OpRead), seg(OpChange)},
+		{grant, "grant", grantBody{Grantee: m.bootstrap, Segments: []sdkauthz.Segment{seg(OpRead), seg(OpChange), seg(OpTighten)},
 			GovernanceUnit: root, IssuedBy: ID}},
 	} {
 		if err := write(w.id, w.typ, w.body); err != nil {

@@ -28,6 +28,9 @@ const (
 	Records  = "infra.authz.security_record"
 	OpRead   = "infra.authz.security_record.read"
 	OpChange = "infra.authz.security_record.change"
+	// OpTighten revokes, narrows or ends before it takes effect a record (tightening_only, security 03): admitted on
+	// the last view of a stale source, its requester judged by the last applied facts (A125)
+	OpTighten = "infra.authz.security_record.tighten"
 	// OpRelinquish ends one's own grant or holding (D82): nobody grants it, the member's own view gives every holder a
 	// fixed segment of it
 	OpRelinquish = "infra.authz.security_record.relinquish"
@@ -56,6 +59,9 @@ const (
 	DefaultSourceRead = 10 * time.Minute
 	MaxSourceHigh     = 5 * time.Minute
 	MaxSourceRead     = time.Hour
+	// DefaultTight is T_tight (security 03's tightening-only operations): a requester judged by the last applied
+	// facts acts alone while the identity source's watermark is no older; beyond it a second person confirms
+	DefaultTight = time.Hour
 )
 
 //go:embed migrations/*.sql
@@ -90,6 +96,9 @@ func Keys() []config.Key {
 		// reads, close for views that depend on the identity source
 		{Name: "AUTHZ_SOURCE_HIGH", Type: config.Duration, Default: DefaultSourceHigh},
 		{Name: "AUTHZ_SOURCE_READ", Type: config.Duration, Default: DefaultSourceRead},
+		// T_tight (security 03): how old the identity source's watermark may be for one person to tighten alone on the
+		// last applied facts
+		{Name: "AUTHZ_T_TIGHT", Type: config.Duration, Default: DefaultTight},
 	}
 }
 
@@ -109,6 +118,8 @@ func Definitions() *sdkauthz.Definitions {
 			{Key: OpRead, ResourceType: Records, Purpose: "read", RiskClass: "low"},
 			{Key: OpChange, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
 				Audit: true},
+			{Key: OpTighten, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
+				Audit: true, TighteningOnly: true},
 			{Key: OpRelinquish, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
 				Audit: true, TighteningOnly: true},
 			{Key: SystemRead, ResourceType: System, Purpose: "read", RiskClass: "low"},

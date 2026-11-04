@@ -86,6 +86,9 @@ func (m *Module) factsOf(ctx context.Context, tx db.Tx, e entry) (facts, plan, *
 	}
 	p.kind = f.Kind
 	err = m.eligibility(ctx, tx, e.requester, structural, &f)
+	if f.Eligible == unprovable {
+		p.basis = f.Basis
+	}
 	return f, p, nil, err
 }
 
@@ -173,7 +176,7 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 		}
 	}
 	// a protected widening's confirmations, checked again now (security 08: confirmers re-checked at every entry)
-	if p.confirmed, err = m.confirmationsOf(ctx, tx, nil, t, e.requester, recordHolder(t), f); err != nil {
+	if p.confirmed, err = m.confirmationsOf(ctx, tx, nil, t, e.requester, recordHolder(t), false, f); err != nil {
 		return false, nil, err
 	}
 	return structural, nil, nil
@@ -325,9 +328,6 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 		f.RevisionsChanged = true
 	}
 	unitOf, holderOf := recordUnit(t), recordHolder(t)
-	if p.confirmed, err = m.confirmationsOf(ctx, tx, req.ConfirmationIDs, t, requester, holderOf, f); err != nil {
-		return false, nil, err
-	}
 	structural := false
 	switch {
 	case req.Direction == Tighten && req.Termination != "":
@@ -344,7 +344,7 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 			structural, p.endReason = s.manages(unitOf), "cancelled"
 		case "reject": // a confirmer's rejection (row 7): someone who may confirm it now, not the applicant, not its object
 			f.Rejection, f.FromState, p.endReason = true, f.FromState && t.State == "awaiting_confirmation", "rejected"
-			ok, err := m.confirmerEligible(ctx, tx, requester)
+			ok, err := m.confirmerEligible(ctx, tx, requester, false)
 			if err != nil {
 				return false, nil, err
 			}
@@ -378,16 +378,14 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 			}
 			p.body, p.endReason = narrowed, ""
 		}
-		if t.Type == "management_holding" {
-			var h holdingBody
-			_ = json.Unmarshal(t.Body, &h)
-			if h.SystemRole == "authorization_admin" {
-				f.AffectsAdmins = true
-				// a protected operation: tightening another authorization admin's holding (security 08, item 7)
-				f.TightenNeedsConfirmation = h.Holder != requester
-				if f.AdminsAfter, err = m.adminsBesides(ctx, tx, h.Holder); err != nil {
-					return false, nil, err
-				}
+		if f.AffectsAdmins, err = affectsAdmins(ctx, tx, s.units, t); err != nil {
+			return false, nil, err
+		}
+		if f.AffectsAdmins && t.Type == "management_holding" {
+			// a protected operation: tightening another authorization admin's holding (security 08, item 7)
+			f.TightenNeedsConfirmation = holderOf != requester
+			if f.AdminsAfter, err = m.adminsBesides(ctx, tx, holderOf); err != nil {
+				return false, nil, err
 			}
 		}
 	case req.Direction == Neutral: // a display name: a new content revision, no access changes (security 08)
@@ -404,6 +402,11 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 		structural, p.body = s.manages(unitOf) || (t.Type == "role_revision" || unitOf == "") && s.admin, renamed
 	default:
 		return false, invalid("direction " + req.Direction + " is not in this version for an existing record"), nil
+	}
+	// the confirmations, once the kind is known: a tightening that does not touch an admin's availability takes a
+	// confirmer by the last applied facts (row 22's exemption)
+	if p.confirmed, err = m.confirmationsOf(ctx, tx, req.ConfirmationIDs, t, requester, holderOf, !f.AffectsAdmins, f); err != nil {
+		return false, nil, err
 	}
 	return structural, nil, nil
 }

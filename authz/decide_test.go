@@ -113,8 +113,18 @@ func TestTheDecisionTable(t *testing.T) {
 			verdict{18, outRejected, "CONTAINMENT_NOT_PROVEN"}},
 		{"a widening the profile wants confirmed", with(passing(Widen, ByUser), func(f *facts) { f.NeedsConfirmation = true }),
 			verdict{20, outAwaitingSaved, "CONFIRMATION_REQUIRED"}},
-		{"a tightening under the two-person rule", with(passing(Tighten, ByUser), func(f *facts) { f.TightenNeedsConfirmation = true }),
+		{"a protected tightening", with(passing(Tighten, ByUser), func(f *facts) { f.TightenNeedsConfirmation = true }),
 			verdict{21, outAwaitingUnsaved, "CONFIRMATION_REQUIRED"}},
+		{"a tightening by the last applied facts beyond T_tight (security 03's two-person rule)", with(passing(Tighten, ByUser),
+			func(f *facts) { f.Eligible, f.BeyondTight = unprovable, true }), verdict{21, outAwaitingUnsaved, "CONFIRMATION_REQUIRED"}},
+		{"beyond T_tight, the second person confirmed", with(passing(Tighten, ByUser), func(f *facts) {
+			f.Eligible, f.BeyondTight, f.Confirmation = unprovable, true, confirmValid
+		}), verdict{30, outApplied, ""}},
+		{"beyond T_tight does not count for a requester proven now", with(passing(Tighten, ByUser), func(f *facts) { f.BeyondTight = true }),
+			verdict{30, outApplied, ""}},
+		{"a cancellation beyond T_tight is not held for a second person", with(passing(Terminate, ByUser), func(f *facts) {
+			f.Eligible, f.BeyondTight = unprovable, true
+		}), verdict{30, outApplied, ""}},
 		{"releasing a hold of another admin", with(passing(RestoreHold, ByUser), func(f *facts) { f.TightenNeedsConfirmation = true }),
 			verdict{21, outAwaitingUnsaved, "CONFIRMATION_REQUIRED"}},
 		{"a cancellation never waits for a confirmation", with(passing(Terminate, ByUser), func(f *facts) { f.TightenNeedsConfirmation = true }),

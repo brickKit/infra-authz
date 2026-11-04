@@ -28,7 +28,7 @@ func testConfirmations(t *testing.T, w *sectest.World, admin *pgx.Conn, root str
 	revokeWith := func(key string, target any, ids ...any) (int, map[string]any) {
 		r := tightenReq(key, target)
 		r["confirmation_ids"] = ids
-		return call(t, w, sectest.Alice, "POST", "/api/authz/changes", r)
+		return call(t, w, sectest.Alice, "POST", changePath(r), r)
 	}
 
 	// only an authorization admin confirms (A123): Bob manages records, holds no such role yet
@@ -91,7 +91,7 @@ func testConfirmations(t *testing.T, w *sectest.World, admin *pgx.Conn, root str
 	_, before := confirm(sectest.Bob, g3["record"], 1)
 	// another admin's holding is a protected tightening (security 08, item 7): it carries a confirmation first (row
 	// 21); the deployment owner's stands in for an independent one on any protected tightening
-	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/changes", tightenReq("cf14", bobAdmin["record"]))
+	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/tightenings", tightenReq("cf14", bobAdmin["record"]))
 	require.Equal(t, 202, code, "%v", out)
 	assert.Equal(t, "awaiting_confirmation", out["outcome"], "nothing saved: the request comes again with its confirmation")
 	assert.Equal(t, "active", recordOf(t, admin, bobAdmin["record"]).State)
@@ -164,7 +164,7 @@ func testProtected(t *testing.T, w *sectest.World, admin *pgx.Conn, root string)
 		"signature": "AAAA"})
 	require.Equal(t, 400, code, "beyond the 72 hours a confirmation holds: %v", out)
 	// the applicant is no confirmer of her own request: her "rejection" is refused (she withdraws instead)
-	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/changes", map[string]any{"change_key": "pr10", "direction": "tighten",
+	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/tightenings", map[string]any{"change_key": "pr10", "direction": "tighten",
 		"termination": "reject", "target": p["record"], "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}})
 	require.Equal(t, 403, code, "%v", out)
 	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/confirmations", map[string]any{"target": p["record"],

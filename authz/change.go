@@ -58,6 +58,9 @@ type changeResult struct {
 	Record            string        `json:"record,omitempty"`
 	NewRevision       *revisionRef  `json:"new_revision,omitempty"`
 	SecurityRevisions []revisionRef `json:"security_revisions,omitempty"`
+	// Basis is last_applied when the requester was judged by the source's last applied facts (security 03): the basis
+	// not proven latest
+	Basis string `json:"basis,omitempty"`
 }
 
 func (r *changeResult) Error() string { return r.Reason + ": " + r.Detail }
@@ -71,6 +74,18 @@ type entry struct {
 	req                    request
 	job                    *firing
 	selfOnly               bool // a relinquishment (D82): only the requester's own record
+}
+
+// operation is the operation that admitted the entry, for its audit: a relinquishment, a tightening, or a change (a
+// widening, a neutral change, the member's own jobs).
+func (e entry) operation() string {
+	switch {
+	case e.selfOnly:
+		return OpRelinquish
+	case e.req.Direction == Tighten:
+		return OpTighten
+	}
+	return OpChange
 }
 
 // plan is what the effect point writes for each outcome of one change.
@@ -87,6 +102,8 @@ type plan struct {
 	from, to  *time.Time
 	at        *time.Time // effective_from
 	successor string     // the predecessor that a new record supersedes
+	// basis: the requester judged by the last applied facts (security 03); the result and the audit say so
+	basis map[string]any
 }
 
 // change runs one user change at the effect point.

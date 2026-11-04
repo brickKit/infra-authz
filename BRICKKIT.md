@@ -13,8 +13,14 @@
 
 账号状态来自身份成员（安全 03 的内部来源）：本组件以带水位的投影保存它（补取、按 ID 批量读取与快照都是身份成员系统面上的标准方法），视图里每个主体带账号是否停用与安全状态版本（入口组件据此判令牌陈旧）。身份来源的水位超过 `AUTHZ_SOURCE_HIGH`（`D_src_high`，起始 1 分钟）时，视图只为普通读取续发，高风险操作在它的有效期过后关闭；超过 `AUTHZ_SOURCE_READ`（`D_src_read`，起始 10 分钟）、或投影还没对齐时，视图关闭，受保护的请求答可重试的 `AUTHORIZATION_VIEW_EXPIRED`。单个账号的状态无法证明时（它的事件被隔离），这个主体不进视图，其他主体照常。部署第一次启动、投影对齐之前，全部视图关闭。
 
-记录有完整的生命周期（安全 08）：待生效的到点生效，来源收紧后视图立即缩小（授予只在治理单元逐级到根的当前上限之内有效），之后由闭包作业把记录记为结束或暂停；持有者可以放弃自己的授予与管理持有资格（`POST /api/authz/relinquishments`）。3.0.17 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
-- 确认与受保护操作；
+记录有完整的生命周期（安全 08）：待生效的到点生效，来源收紧后视图立即缩小（授予只在治理单元逐级到根的当前上限之内有效），之后由闭包作业把记录记为结束或暂停；持有者可以放弃自己的授予与管理持有资格（`POST /api/authz/relinquishments`）。
+
+受保护的操作要第二个人确认（安全 08）：新建或扩大管理单元、授出管理持有资格，保存为待确认，另一名授权管理员确认后由本组件生效；撤销或收窄别人的授权管理员持有资格，要先附上确认。只有一名授权管理员时，由部署所有者用离线的私钥签名确认（`AUTHZ_OWNER_KEY`）。
+
+身份来源停住时，收紧（撤销、收窄、终止尚未生效的记录）照常可以办理（安全 03 的只减少访问的操作）：请求者的资格按身份来源最后已应用的事实判断，来源水位的年龄在 `AUTHZ_T_TIGHT`（起始 1 小时）内一个人办理，超过后、或来源发现回退时，要另一名授权管理员（资格同样按最后已应用的事实判断）或部署所有者确认；结果带 `basis: last_applied`，审计标明“依据未证明为最新”。对象是授权管理员的持有资格、或这样的持有资格所在的管理单元时，不按旧事实办理：请求者或确认人要此刻可证明，否则答处理中。放宽在来源停住时一律不办理。
+
+3.0.18 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
+- 部署所有者确认放宽时的冷静期；
 - 严格路径（A、B 档）；
 - 成员切换；
 - 共享、委托与扮演；
@@ -57,6 +63,8 @@
 | `AUTHZ_BOOTSTRAP_ADMIN` | 安装认领 |
 | `IAM_GRPC_URL`、`IAM_COMPONENT`（必填） | 身份成员的系统面与组件 ID：账号状态从这里补取与读取 |
 | `AUTHZ_SOURCE_HIGH`、`AUTHZ_SOURCE_READ` | `D_src_high`（起始 1 分钟，至多 5 分钟）与 `D_src_read`（起始 10 分钟，至多 1 小时，不短于前者）；调大即放宽撤权的上界，产品说明随之改写（安全 03） |
+| `AUTHZ_T_TIGHT` | `T_tight`（起始 1 小时）：身份来源停住时，一个人按最后已应用的事实办理收紧的水位年龄上限；超过后要第二人确认（安全 03） |
+| `AUTHZ_OWNER_KEY` | 部署所有者确认的公钥 |
 | `BUS_URL`（必填） | 消息系统 |
 | `DEPLOYMENT_ID`、`IAM_ISSUER`、`IAM_JWKS_URL`、`AUTHZ_GRPC_URL`、`SERVICE_TLS_CERT_FILE`、`SERVICE_TLS_KEY_FILE`、`SERVICE_TLS_CA_FILE`（必填） | 受保护的用户面与 mTLS 的系统面要用 |
 | `PG_HOST`、`PG_DATABASE`、`PG_USER`、`PG_PASSWORD`、`PG_SCHEMA`（必填） | 自己的数据库，密码是密钥；迁移另用 `PG_OWNER_USER`、`PG_OWNER_PASSWORD` |
@@ -68,30 +76,35 @@
 
   | 路由 | 操作 | 说明 |
   | --- | --- | --- |
-  | `POST /api/authz/changes` | `infra.authz.security_record.change` | 生效点，见下 |
-  | `GET /api/authz/changes/{change_key}` | `infra.authz.security_record.change` 或 `.relinquish` | 按变更键查询结果（键在调用者自己的命名空间里；没有绑定的答 `unbound`） |
+  | `POST /api/authz/changes` | `infra.authz.security_record.change` | 生效点：放宽与中性变更，见下 |
+  | `POST /api/authz/tightenings` | `infra.authz.security_record.tighten`（只减少访问） | 生效点：收紧，见下；身份来源停住时照常可用 |
+  | `POST /api/authz/confirmations` | 已保存的放宽：`.change`；收紧：`.tighten` | 确认一项受保护的变更或两人规则下的收紧：`target`；收紧另带 `expected_revision`；部署所有者确认另带 `basis: deployment_owner`、`expires_at` 与 `signature`。回答确认的 `id` 与 `expires_at`（201） |
+  | `GET /api/authz/confirmations/owner-payload?target=&expected_revision=` | 同上 | 部署所有者要签的内容（`owner-sign` 与种子用） |
+  | `GET /api/authz/changes/{change_key}` | `.change`、`.tighten` 或 `.relinquish` | 按变更键查询结果（键在调用者自己的命名空间里；没有绑定的答 `unbound`） |
   | `POST /api/authz/relinquishments` | `infra.authz.security_record.relinquish` | 放弃自己的一整条授予或管理持有资格（D82）：谁也不用授予，本组件给每个持有者一段固定的段 |
   | `GET /api/authz/records?type=` | `infra.authz.security_record.read` | 调用者看得到的有效安全记录：管理者看全部，持有者只看自己的（维度 `holder`） |
 
-`POST /api/authz/changes` 的请求体是安全 09a 的 `be.security.change_request`（`requested_by` 与触发方式由本组件从令牌得出，不在请求里）：
+两个生效点路由的请求体都是安全 09a 的 `be.security.change_request`（`requested_by` 与触发方式由本组件从令牌得出，不在请求里）；`tighten` 只发往 `/api/authz/tightenings`，发往 `/api/authz/changes` 的答 `REQUEST_INVALID`。收紧可带 `confirmation_ids`（受保护的收紧与两人规则要先确认）。管理者的授予要同时有 `.change` 与 `.tighten`：
 
 | 方向 | 字段 | 做什么 |
 | --- | --- | --- |
 | `widen`（新记录） | `candidate`（带 `record_type`：`management_unit`、`management_holding`、`role_revision`、`grant`，可带 `valid` 与 `predecessor`）、`candidate_digest`、可选的 `effective_from` | 建新记录；带 `predecessor` 是续期或扩大（新记录必须包含旧的，生效时旧的以 `superseded` 结束）；`effective_from` 在未来的保存为待生效，到点由本组件进生效点 |
 | `tighten` | `target`，可选的 `expected_state_revision`、`expected_revision` | 撤销或放弃整条记录 |
 | `tighten` | `target`、`candidate`、`candidate_digest` | 收窄：同一记录的新内容修订，候选必须在原内容之内 |
-| `tighten` | `target`、`termination`（`withdraw`、`cancel`）、`expected_state_revision` | 终止尚未生效的记录（收回自己的申请、管理者取消） |
+| `tighten` | `target`、`termination`（`withdraw`、`cancel`、`reject`）、`expected_state_revision` | 终止尚未生效的记录（收回自己的申请、管理者取消、确认人拒绝） |
 | `neutral` | `target`、`candidate`、`candidate_digest` | 只改管理单元或角色修订的名称 |
 
 `candidate_digest` 是候选在 `be.security.<record_type>` 下的规范形式的摘要（`be-sdk-go` 的 `authz.CandidateDigest`）。同时收紧与放宽的变更拆成两步，先收紧后放宽。
 
-回答是 `be.security.change_result`：`applied`（200）；`processing`、`awaiting_confirmation`、`scheduled`（202）；拒绝是错误，原因见下。生效、终局的拒绝与保存了记录的结果占用变更键：同一个键同样的内容原样返回上次的结果，换了内容答 `CHANGE_KEY_CONFLICT`；处理中与可重试的拒绝不占用，同一个键稍后再交。结果不明时用 `GET /api/authz/changes/{change_key}` 查，没有绑定的答 `unbound`。拒绝的原因：
+回答是 `be.security.change_result`（请求者按最后已应用的事实判断时带 `basis: last_applied`）：`applied`（200）；`processing`、`awaiting_confirmation`、`scheduled`（202）；拒绝是错误，原因见下。生效、终局的拒绝与保存了记录的结果占用变更键：同一个键同样的内容原样返回上次的结果，换了内容答 `CHANGE_KEY_CONFLICT`；处理中与可重试的拒绝不占用，同一个键稍后再交。结果不明时用 `GET /api/authz/changes/{change_key}` 查，没有绑定的答 `unbound`。拒绝的原因：
 - `PERMISSION_DENIED`：请求者无权（不管理该单元，或不是记录的持有者）；
 - `CONTAINMENT_NOT_PROVEN`：超出管理上限（按单元逐级到根的有效上限），附上是哪个维度；
 - `LAST_ADMIN_PROTECTED`：要移除的是最后一个授权管理员；
 - `CHANGE_REVISION_STALE`：目标的状态或内容已经变了；
 - `REQUEST_INVALID`：请求不成立（例如要求拆成两步）；`DEFINITION_PENDING`：引用的资源定义还在路上，可重试；
-- `ADMIN_AVAILABILITY_UNPROVABLE`（处理中）：请求者此刻的资格无法证明（身份来源停住），稍后再交。
+- `ADMIN_AVAILABILITY_UNPROVABLE`（处理中）：请求者或确认人此刻的资格无法证明（身份来源停住），稍后再交；
+- `CONFIRMATION_REQUIRED`（`awaiting_confirmation`）：要先确认（受保护的变更、超过 `T_tight` 的收紧）；
+- `AUTHORIZATION_UNPROVABLE`（可重试）：身份来源停住时，请求者按最后已应用的事实也不合格，或他的账号被隔离。
 
 ## 外壳声明
 
