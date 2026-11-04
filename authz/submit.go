@@ -18,7 +18,9 @@ import (
 )
 
 // registry is who owns each resource type and permission key (the assembly project's registry, delivered as
-// configuration): kind ("resource_type" or "permission") + "\x00" + key -> owner component.
+// configuration): kind ("resource_type" or "permission") + "\x00" + key -> owner component; a retired permission key
+// (an optional fourth column, its retirement date: protocol 19, a key is retired, never reused) also as
+// "retired\x00" + key.
 type registry map[string]string
 
 func parseRegistry(tsv string) (registry, error) {
@@ -30,14 +32,22 @@ func parseRegistry(tsv string) (registry, error) {
 		}
 		f := strings.Split(line, "\t")
 		if len(f) < 3 || (f[0] != "resource_type" && f[0] != "permission") {
-			return nil, fmt.Errorf("AUTHZ_REGISTRY line %d: want kind, key, owner_component", i+1)
+			return nil, fmt.Errorf("AUTHZ_REGISTRY line %d: want kind, key, owner_component and, for a retired permission key, its retirement", i+1)
 		}
 		r[f[0]+"\x00"+f[1]] = f[2]
+		if len(f) > 3 && strings.TrimSpace(f[3]) != "" && f[0] == "permission" {
+			r["retired\x00"+f[1]] = f[3]
+		}
 	}
 	return r, nil
 }
 
 func (r registry) owner(kind, key string) string { return r[kind+"\x00"+key] }
+
+// usable: a permission key registered and not retired (security 08: only those take part in an effective segment).
+func (r registry) usable(key string) bool {
+	return r.owner("permission", key) != "" && r["retired\x00"+key] == ""
+}
 
 type rejection struct{ reason, digest, detail string }
 

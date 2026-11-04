@@ -37,7 +37,9 @@ type firing struct {
 
 // key is the derived key <record>:<state revision>:<trigger>: a record that moves on and comes back gets a new one,
 // so a second entry is never answered by the first one's binding (CP55, CP81).
-func (a firing) key() string { return a.Record + ":" + strconv.FormatInt(a.StateRevision, 10) + ":" + a.Trigger }
+func (a firing) key() string {
+	return a.Record + ":" + strconv.FormatInt(a.StateRevision, 10) + ":" + a.Trigger
+}
 
 // from is the state this trigger starts from.
 func (a firing) from() string {

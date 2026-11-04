@@ -23,9 +23,10 @@ type candidateOf struct {
 // standing is the requester's management standing as the security records stand now: the active units, the units it
 // holds, and whether one holding makes it an authorization admin.
 type standing struct {
-	units map[string]unitBody
-	held  []string
-	admin bool
+	units  map[string]unitBody
+	held   []string
+	admin  bool
+	limits *limits // the units' effective limits
 }
 
 // manages: the requester holds this unit or one above it.
@@ -67,7 +68,7 @@ func (m *Module) factsOf(ctx context.Context, tx db.Tx, e entry) (facts, plan, *
 	if err != nil {
 		return f, p, nil, err
 	}
-	s := standing{units: units, held: held, admin: admin}
+	s := standing{units: units, held: held, admin: admin, limits: newLimits(units)}
 	var structural bool // the requester may make this change, as the security records stand
 	var pre *changeResult
 	switch {
@@ -177,7 +178,7 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType string, raw json.RawMessage, stored bool,
 	s standing, f *facts, p *plan) (structural bool, bad string, pre *changeResult, err error) {
 	var segs []sdkauthz.Segment
-	var unit unitBody
+	var lim *limit // the limit the segments must be within
 	switch recType {
 	case "management_unit":
 		var b unitBody
@@ -185,13 +186,13 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 		if b.Root {
 			return false, "only the install claim makes a root unit", nil, nil
 		}
-		parent, ok := s.units[b.Parent]
-		if !ok {
+		if _, ok := s.units[b.Parent]; !ok {
 			return false, "no active parent unit " + b.Parent, nil, nil
 		}
-		structural, f.ManagementWiden, p.body, unit, segs = s.manages(b.Parent), true, b, parent, b.ManagedScope
+		lim = s.limits.of(b.Parent)
+		structural, f.ManagementWiden, p.body, segs = s.manages(b.Parent), true, b, b.ManagedScope
 		for _, op := range b.GrantableOperations {
-			if !parent.Root && !slices.Contains(parent.GrantableOperations, op) {
+			if lim == nil || !lim.all && !slices.Contains(lim.ops, op) {
 				f.Contained = false
 			}
 		}
@@ -213,8 +214,7 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 	case "grant":
 		var b grantBody
 		_ = json.Unmarshal(raw, &b)
-		u, ok := s.units[b.GovernanceUnit]
-		if !ok {
+		if _, ok := s.units[b.GovernanceUnit]; !ok {
 			return false, "no active governance unit " + b.GovernanceUnit, nil, nil
 		}
 		if b.RoleRevision != "" && !stored {
@@ -226,12 +226,12 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 			return false, "a grant needs a grantee and segments or a role revision", nil, nil
 		}
 		b.IssuedBy = requester
-		structural, p.body, unit, segs = s.manages(b.GovernanceUnit), b, u, b.Segments
+		structural, p.body, lim, segs = s.manages(b.GovernanceUnit), b, s.limits.of(b.GovernanceUnit), b.Segments
 	default:
 		return false, "record type " + recType + " is not in this version", nil, nil
 	}
 	if segs != nil {
-		why, err := m.contains(ctx, tx, segs, unit)
+		why, err := m.contains(ctx, tx, segs, lim)
 		var rej *changeResult
 		switch {
 		case errors.As(err, &rej):
@@ -357,8 +357,8 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 
 // contains proves the segments within the unit's limit; why is the first failure. Definitions not there come back as
 // a *changeResult error: retryable when the owner's definitions are on their way, final when nobody owns the type.
-func (m *Module) contains(ctx context.Context, tx db.Tx, segs []sdkauthz.Segment, unit unitBody) (string, error) {
-	err := m.within(ctx, tx, segs, unit, "")
+func (m *Module) contains(ctx context.Context, tx db.Tx, segs []sdkauthz.Segment, lim *limit) (string, error) {
+	err := m.within(ctx, tx, segs, lim, "")
 	var rej *errRejected
 	switch {
 	case err == nil:

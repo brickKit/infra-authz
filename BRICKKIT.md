@@ -30,7 +30,8 @@
 - `AUTHZ_INSTANCE`：安装时生成一个 UUID，随部署的运行档案保存，以后不再改变。本组件发现库里记的实例与配置不同时，拒绝启动。
 - `AUTHZ_REGISTRY`（通常写成 `file://`，或用 `AUTHZ_REGISTRY_FILE`）：
   - 资源类型与权限键的属主，由装配从注册表生成；
-  - 格式是 TSV，三列为 `kind`、`key`、`owner_component`，`kind` 取 `resource_type` 或 `permission`；
+  - 格式是 TSV，三列为 `kind`、`key`、`owner_component`，`kind` 取 `resource_type` 或 `permission`；已退役的权限键多第四列，写退役日期：退役的键不再给任何访问（授予照旧，视图里它的段为空）；
+  - 本组件约 30 秒重读一次这个文件，退役在那之后的下一次核验生效；
   - 本组件自己的键也要在里面。
 - `AUTHZ_BOOTSTRAP_ADMIN`：第一个授权管理员的平台主体，只在本组件还没有任何管理持有资格时使用。
 - 部署的服务证书（`SERVICE_TLS_*`）。系统面只接受 mTLS，部署里每个组件都可以调用它的两个系统方法。

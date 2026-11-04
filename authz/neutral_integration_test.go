@@ -42,7 +42,7 @@ func testNeutral(t *testing.T, w *sectest.World, admin *pgx.Conn, root, east str
 		change(cand)
 		raw, _ := json.Marshal(cand)
 		return map[string]any{"change_key": key, "direction": "neutral", "target": east, "candidate": json.RawMessage(raw),
-			"candidate_digest": candidateDigest("management_unit", raw),
+			"candidate_digest":        candidateDigest("management_unit", raw),
 			"expected_state_revision": map[string]any{"domain": "authz.record.state", "value": itoa64(before.StateRev)}}
 	}
 	sec0, aud0 := counts()

@@ -58,13 +58,15 @@ const registryTSV = "kind\tkey\towner_component\n" +
 	"permission\tinfra.authz.system.read\tinfra/authz\npermission\tinfra.authz.system.verify\tinfra/authz\n" +
 	"permission\tinfra.authz.system.submit\tinfra/authz\n" +
 	"resource_type\tdemo.order\tdemo/orders\npermission\tdemo.order.read\tdemo/orders\n" +
-	"resource_type\tdemo.invoice\tdemo/invoices\npermission\tdemo.invoice.read\tdemo/invoices\n"
+	"resource_type\tdemo.invoice\tdemo/invoices\npermission\tdemo.invoice.read\tdemo/invoices\n" +
+	"permission\tdemo.invoice.export\tdemo/invoices\n"
 
 // invoices submits its definitions late in the test: a grant naming its resource type waits for them (D77).
 var invoices = &sdkauthz.Definitions{Component: "demo/invoices",
 	Resources: []sdkauthz.Resource{{Type: "demo.invoice", ViewOperation: "demo.invoice.read",
 		Dimensions: map[string]sdkauthz.Dimension{}, Fields: map[string]sdkauthz.Field{"id": {Class: sdkauthz.Ordinary}}}},
-	Operations: []sdkauthz.Operation{{Key: "demo.invoice.read", ResourceType: "demo.invoice", Purpose: "read", RiskClass: "low"}}}
+	Operations: []sdkauthz.Operation{{Key: "demo.invoice.read", ResourceType: "demo.invoice", Purpose: "read", RiskClass: "low"},
+		{Key: "demo.invoice.export", ResourceType: "demo.invoice", Purpose: "export", RiskClass: "low"}}}
 
 func region(v ...string) map[string]sdkauthz.Atom {
 	return map[string]sdkauthz.Atom{"region": {Kind: "in", Values: v}}
@@ -341,6 +343,13 @@ func TestMemberEndToEnd(t *testing.T) {
 		return len(subjects[p].Segments) > 0
 	})
 	testNeutral(t, w, admin, root, eastID)
+	testEffective(t, w, admin, root, func(p string) []sdkauthz.Segment {
+		ans := verify(held)
+		if ans.Shards[0].Status == "changed" {
+			held.Digest, subjects = ans.Shards[0].View.Digest, ans.Shards[0].View.Subjects
+		}
+		return subjects[p].Segments
+	})
 
 	// T3: the identity member's account status reaches the views (security 03's internal sources; P8.25)
 	again4 := submitChange(t, w, sectest.Alice, grantReq("b4", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)

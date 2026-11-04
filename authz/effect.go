@@ -47,9 +47,10 @@ func (m *Module) audited(ctx context.Context, tx db.Tx, requester, direction, ty
 	return err
 }
 
-// within proves every candidate segment is contained in one of the unit's limit segments for its operation (security
-// 07; no split along a dimension in this step). A root unit contains every well-formed segment.
-func (m *Module) within(ctx context.Context, tx db.Tx, segs []sdkauthz.Segment, unit unitBody, grantee string) error {
+// within proves every candidate segment is contained in one of the unit's effective limit segments for its operation
+// (security 07; no split along a dimension in this step): its scope ∩ its parents' up to the root (effective.go). The
+// root contains every well-formed segment.
+func (m *Module) within(ctx context.Context, tx db.Tx, segs []sdkauthz.Segment, lim *limit, grantee string) error {
 	for _, s := range segs {
 		r, err := m.resourceFor(ctx, tx, s.ResourceType)
 		if err != nil {
@@ -71,14 +72,17 @@ func (m *Module) within(ctx context.Context, tx db.Tx, segs []sdkauthz.Segment, 
 		if err := s.Check(r); err != nil {
 			return reject(errs.ReasonRequestInvalid, err.Error())
 		}
-		if unit.Root {
+		switch {
+		case lim == nil:
+			return reject(errs.ReasonContainmentNotProven, "the unit is not under an active unit up to the root")
+		case lim.all:
 			continue
 		}
-		if !slices.Contains(unit.GrantableOperations, s.Operation) {
+		if !slices.Contains(lim.ops, s.Operation) {
 			return reject(errs.ReasonContainmentNotProven, "operation "+s.Operation+" is not grantable in the unit")
 		}
 		var last *notContained
-		ok := slices.ContainsFunc(unit.ManagedScope, func(l sdkauthz.Segment) bool {
+		ok := slices.ContainsFunc(lim.segs, func(l sdkauthz.Segment) bool {
 			last = contained(s, l, grantee)
 			return last == nil
 		})

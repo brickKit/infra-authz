@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/canon"
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/errs"
@@ -57,13 +58,21 @@ func readState(ctx context.Context, tx db.Tx) (state, error) {
 
 // definitionsOf reads a component's current accepted definitions: resource definitions by type, with the version.
 type defined struct {
-	version   string
-	resources map[string]map[string]any // type -> fields
-	digests   map[string]string         // type -> the resource definition's digest
+	version    string
+	resources  map[string]map[string]any // type -> fields
+	digests    map[string]string         // type -> the resource definition's digest
+	operations map[string]bool           // the operation keys its definitions declare
+}
+
+// usable: a segment of this component's resource types whose permission key is registered, not retired and still
+// defined by the component (security 08: only those take part in an effective segment).
+func (d defined) usable(s sdkauthz.Segment, reg registry) bool {
+	_, mine := d.resources[s.ResourceType]
+	return mine && d.operations[s.Operation] && reg.usable(s.Operation)
 }
 
 func definitionsOf(ctx context.Context, tx db.Tx, component string) (defined, bool, error) {
-	d := defined{resources: map[string]map[string]any{}, digests: map[string]string{}}
+	d := defined{resources: map[string]map[string]any{}, digests: map[string]string{}, operations: map[string]bool{}}
 	rows, err := tx.Query(ctx, `SELECT c.version, d.record_type, d.key, d.digest, d.record FROM authz_component c
 		JOIN authz_definition_set s ON s.component = c.component AND s.version = c.version
 		JOIN authz_definition d ON d.digest = ANY(s.digests)
@@ -77,6 +86,9 @@ func definitionsOf(ctx context.Context, tx db.Tx, component string) (defined, bo
 		var raw []byte
 		if err := rows.Scan(&d.version, &rt, &key, &digest, &raw); err != nil {
 			return d, false, err
+		}
+		if rt == "be.security.operation_definition" {
+			d.operations[key] = true
 		}
 		if rt != "be.security.resource_definition" {
 			continue
@@ -161,14 +173,25 @@ func (m *Module) view(ctx context.Context, tx db.Tx, component string) (raw []by
 	if err != nil {
 		return
 	}
+	units, err := m.units(ctx, tx)
+	if err != nil {
+		return
+	}
+	reg, err := m.registry()
+	if err != nil {
+		return
+	}
+	lims := newLimits(units)
 	segsOf := map[string][]any{}
 	for _, g := range grants {
 		var b grantBody
 		if err = json.Unmarshal(g.Body, &b); err != nil {
 			return
 		}
-		for _, s := range b.Segments {
-			if _, mine := defs.resources[s.ResourceType]; !mine {
+		// the effective segments (security 08): the grant's ∩ its governance unit's current limit, of keys registered,
+		// not retired and still defined by their owner
+		for _, s := range lims.of(b.GovernanceUnit).cut(b.Segments, b.Grantee) {
+			if !defs.usable(s, reg) {
 				continue
 			}
 			s.Source = g.ID
