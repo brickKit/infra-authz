@@ -87,8 +87,9 @@ func (e *e2e) coolingOff() {
 	submitChange(t, w, sectest.Alice, grantReq("co3", root, ivan, segs), 200)
 	waitForView(t, w, ivan)
 
-	// both other admins frozen at the identity member: the owner's key stands in, but their unavailability is recent
-	// (when it began is not known here): the widening waits out the cooling-off (CP113)
+	// both other admins frozen at the identity member (each freeze an identity-side disposition holding their admin
+	// holdings, T6c): the owner's key stands in, but their unavailability is recent: the widening waits out the
+	// cooling-off (CP113)
 	status(sectest.Bob, "security_frozen")
 	status(ivan, "security_frozen")
 	cool := submitChange(t, w, sectest.Alice, unitReq("co4", root, "cooling", scope, ops), 202)
@@ -101,8 +102,10 @@ func (e *e2e) coolingOff() {
 	assert.Equal(t, 1, audited(cool["record"], "cooling_off"), "the admins are told (the audit, without a channel)")
 	assert.Equal(t, 1, audited(cool["record"], "owner_confirmation"), "every use of the owner's key is told")
 
-	// Ivan is available again: he vetoes it, though he does not manage the root (row 7)
+	// Ivan is available again (unfrozen, his identity-side disposition released): he vetoes it, though he does not
+	// manage the root (row 7)
 	status(ivan, "active")
+	releaseIdentitySide(t, w, ivan, "co4r")
 	veto := func(key string, target any) (int, map[string]any) {
 		return callAs(t, bearerOf(ivan), "POST", "/api/authz/tightenings", map[string]any{"change_key": key, "direction": "tighten",
 			"termination": "cancel", "target": target, "expected_state_revision": map[string]any{"domain": "authz.record.state",
@@ -156,10 +159,11 @@ func (e *e2e) coolingOff() {
 	}
 	withdraw("co12", blocked["record"])
 
-	// a day later Ivan's end no longer holds Alice back; Bob, active again, gives up his admin holding himself: a
-	// holding that ended within the cooling-off alone calls for it
+	// a day later Ivan's end no longer holds Alice back; Bob, active again and released, gives up his admin holding
+	// himself: a holding that ended within the cooling-off alone calls for it
 	age(ivan)
 	status(sectest.Bob, "active")
+	releaseIdentitySide(t, w, sectest.Bob, "co14r")
 	require.Eventually(t, func() bool {
 		code, out = callAs(t, bearerOf(sectest.Bob), "POST", "/api/authz/relinquishments", tightenReq("co15", bobsAdminHolding(t, admin)))
 		return code == 200

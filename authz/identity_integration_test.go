@@ -205,10 +205,11 @@ func (e *e2e) identity() {
 	assert.False(t, entry.AccountsDisabled)
 	require.NoError(t, iam.set(ctx, carol, "active", 2)) // a password change at the identity member
 	carolNow(func(e sdkauthz.SubjectEntry) bool { return e.SecurityVersion == 2 })
-	// frozen: no access (the view says so), but nothing ends; an identity-side disposition holds it (T6)
+	// frozen: an identity-side disposition (T6c) holds her grant and leaves her segments out; nothing ends
 	require.NoError(t, iam.set(ctx, carol, "security_frozen", 3))
-	entry = carolNow(func(e sdkauthz.SubjectEntry) bool { return e.AccountsDisabled })
-	assert.EqualValues(t, 3, entry.SecurityVersion)
+	require.Eventually(t, func() bool { return recordOf(t, admin, again4["record"]).State == "held" }, 10*time.Second,
+		100*time.Millisecond, "held by the identity-side disposition")
+	carolNow(func(e sdkauthz.SubjectEntry) bool { return len(e.Segments) == 0 })
 
 	// disabled: the account ended as a source; the closure job ends what it was a source of (security 08), a grant
 	// and a holding, once its status is applied
@@ -222,14 +223,14 @@ func (e *e2e) identity() {
 	}, 10*time.Second, 100*time.Millisecond, "the books of a disabled account")
 	assert.Equal(t, "source_ended", recordOf(t, admin, daves["record"]).EndReason)
 	assert.Equal(t, "source_ended", recordOf(t, admin, daveHolds["record"]).EndReason)
-	assert.Equal(t, "active", recordOf(t, admin, again4["record"]).State, "carol is frozen, not disabled: her grant stays")
+	assert.Equal(t, "held", recordOf(t, admin, again4["record"]).State, "carol is frozen, not disabled: her grant is held, not ended")
 	require.Eventually(t, func() bool { // two statuses applied (her first, then disabled): two closures, both done
 		var all, done int
 		_ = admin.QueryRow(ctx, "SELECT count(*), count(*) FILTER (WHERE state = 'done') FROM "+itSchema+
 			".be_work_item WHERE job = $1 AND args->>'ref' = $2", JobClosure, eve).Scan(&all, &done)
 		return all >= 2 && done == all
 	}, 10*time.Second, 100*time.Millisecond, "eve's closures ran")
-	assert.Equal(t, "active", recordOf(t, admin, eves["record"]).State, "disabled as compromised: a disposition, nothing ends")
+	assert.Equal(t, "held", recordOf(t, admin, eves["record"]).State, "disabled as compromised: a disposition holds it, nothing ends")
 
 	// Bob's security change: tokens issued before are stale at the member's own surface; one of the new version passes
 	require.NoError(t, iam.set(ctx, sectest.Bob, "active", 2))

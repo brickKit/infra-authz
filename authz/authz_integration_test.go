@@ -97,6 +97,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	e.coolingOff()
 	e.dispositions()
 	e.releases()
+	e.identitySide()
 	e.audited()
 }
 

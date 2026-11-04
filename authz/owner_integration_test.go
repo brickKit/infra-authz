@@ -3,6 +3,7 @@
 package authz
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -80,4 +81,41 @@ func protectBy(t *testing.T, w *sectest.World, who, confirmer string, req map[st
 	require.Eventually(t, func() bool { return recordOf(t, itAdmin, out["record"]).State == "active" }, 10*time.Second,
 		50*time.Millisecond, "confirmed: the member's job applies it")
 	return map[string]any{"record": out["record"], "outcome": "applied"}
+}
+
+// ownerConfirmRelease confirms a disposition's release with the deployment owner's key, bound to the disposition at
+// revision 1.
+func ownerConfirmRelease(t *testing.T, w *sectest.World, id string) map[string]any {
+	t.Helper()
+	code, p := call(t, w, sectest.Alice, "GET", "/api/authz/confirmations/owner-payload?disposition="+url.QueryEscape(id), nil)
+	require.Equal(t, 200, code, "%v", p)
+	str := func(k string) string { v, _ := p[k].(string); return v }
+	o := sdkauthz.OwnerConfirmation{Deployment: str("deployment"), Target: str("target"), ExpectedRevision: str("expected_revision"),
+		ExpiresAt: str("expires_at")}
+	sig, err := o.Sign(ownerPriv)
+	require.NoError(t, err)
+	code, c := call(t, w, sectest.Alice, "POST", "/api/authz/confirmations", map[string]any{"disposition": id,
+		"expected_revision": map[string]any{"domain": dispositionDomain, "value": o.ExpectedRevision}, "basis": "deployment_owner",
+		"expires_at": o.ExpiresAt, "signature": sig})
+	require.Equal(t, 201, code, "%v", c)
+	return c
+}
+
+// releaseIdentitySide releases who's active identity-side disposition (all its signals), the owner confirming it when
+// who is an authorization admin.
+func releaseIdentitySide(t *testing.T, w *sectest.World, who, key string) {
+	t.Helper()
+	var id string
+	var rev int64
+	var refs []string
+	require.NoError(t, itAdmin.QueryRow(context.Background(), "SELECT id::text, revision, signal_ref FROM "+itSchema+
+		".authz_disposition WHERE subject = $1 AND origin = 'identity_side' AND state = 'active'", who).Scan(&id, &rev, &refs))
+	body := map[string]any{"change_key": key, "signal_refs": refs,
+		"disposition_revision": map[string]any{"domain": dispositionDomain, "value": itoa64(rev)}}
+	code, out := call(t, w, sectest.Alice, "POST", "/api/authz/dispositions/"+id+"/release", body)
+	if code == 202 && out["outcome"] == "awaiting_confirmation" {
+		body["confirmation_ids"] = []any{ownerConfirmRelease(t, w, id)["id"]}
+		code, out = call(t, w, sectest.Alice, "POST", "/api/authz/dispositions/"+id+"/release", body)
+	}
+	require.Equal(t, 200, code, "%v", out)
 }

@@ -130,7 +130,13 @@ func (e *e2e) dispositions() {
 	require.Eventually(t, func() bool { return own() == 0 }, 10*time.Second, 200*time.Millisecond, "her own records: left out")
 	code, list := call(t, w, sectest.Alice, "GET", "/api/authz/dispositions", nil)
 	require.Equal(t, 200, code, "%v", list)
-	assert.Len(t, list["dispositions"], 4)
+	mine := 0 // the identity-side ones the phases before derived are in the list too (T6c)
+	for _, d := range list["dispositions"].([]any) {
+		if d.(map[string]any)["body"].(map[string]any)["origin"] == "admin" {
+			mine++
+		}
+	}
+	assert.Equal(t, 4, mine, "the four this phase made")
 }
 
 // withoutReason is a record's state without the reason (a hold has none to compare).

@@ -4,7 +4,6 @@ package authz
 
 import (
 	"context"
-	"net/url"
 	"testing"
 	"time"
 
@@ -103,21 +102,7 @@ func (e *e2e) releases() {
 	// unit's and the records' dispositions released too, the east is given again (CP39, CP31)
 	var held string
 	require.NoError(t, admin.QueryRow(ctx, "SELECT id::text FROM "+itSchema+".authz_record WHERE disposition = $1", east).Scan(&held))
-	ownerOf := func(id string) map[string]any { // the owner's confirmation of a release, bound to the disposition at revision 1
-		t.Helper()
-		code, p := call(t, w, sectest.Alice, "GET", "/api/authz/confirmations/owner-payload?disposition="+url.QueryEscape(id), nil)
-		require.Equal(t, 200, code, "%v", p)
-		str := func(k string) string { v, _ := p[k].(string); return v }
-		o := sdkauthz.OwnerConfirmation{Deployment: str("deployment"), Target: str("target"), ExpectedRevision: str("expected_revision"),
-			ExpiresAt: str("expires_at")}
-		sig, err := o.Sign(ownerPriv)
-		require.NoError(t, err)
-		code, c := call(t, w, sectest.Alice, "POST", "/api/authz/confirmations", map[string]any{"disposition": id,
-			"expected_revision": map[string]any{"domain": dispositionDomain, "value": "1"}, "basis": "deployment_owner",
-			"expires_at": o.ExpiresAt, "signature": sig})
-		require.Equal(t, 201, code, "%v", c)
-		return c
-	}
+	ownerOf := func(id string) map[string]any { return ownerConfirmRelease(t, w, id) }
 	elsewhere := ownerOf(east) // for Judy's release below: bound to another disposition
 	code, out = release(sectest.Alice, "rel8s", east, "2")
 	require.Equal(t, 409, code, "a revision the disposition does not have (final: it binds its key): %v", out)

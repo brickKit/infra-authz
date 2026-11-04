@@ -56,6 +56,10 @@ func lockDisposition(ctx context.Context, tx db.Tx, id string) (*dispositionRow,
 type plannedRelease struct {
 	disp    *dispositionRow
 	records []string
+	// identity-side: the signal records left after this release removes the ones it names (T6c); while any is
+	// left, the disposition stays active and nothing it holds comes back
+	left     []string
+	identity bool
 }
 
 // releasing reads a release: the disposition active and at the revision asked; the requester may release it; the
@@ -82,7 +86,17 @@ func (m *Module) releasing(ctx context.Context, tx db.Tx, e entry, s standing, f
 	if err != nil {
 		return false, nil, err
 	}
-	p.release, p.recType = &plannedRelease{disp: d}, dispositionType
+	p.release, p.recType = &plannedRelease{disp: d, identity: d.Origin == "identity_side"}, dispositionType
+	if p.release.identity && f.FromState {
+		left, ok, err := releaseSignals(ctx, tx, d, in.SignalRefs)
+		if err != nil {
+			return false, nil, err
+		}
+		if !ok {
+			return false, invalid("an identity-side disposition's release names the signal records it removes (signal_refs), each in its set"), nil
+		}
+		p.release.left = left
+	}
 	for _, r := range recs {
 		p.release.records = append(p.release.records, r.ID)
 		f.ManagementWiden = f.ManagementWiden || r.Type == "management_holding"
@@ -118,6 +132,22 @@ func (m *Module) releasing(ctx context.Context, tx db.Tx, e entry, s standing, f
 // superseded (CP31); the disposition released.
 func (m *Module) release(ctx context.Context, tx db.Tx, e entry, p plan, change string) (changeResult, error) {
 	r := p.release
+	if r.identity {
+		if _, err := tx.Exec(ctx, "UPDATE authz_disposition SET signal_ref = $2, updated_at = now() WHERE id = $1",
+			r.disp.ID, nonNil(r.left)); err != nil {
+			return changeResult{}, err
+		}
+		if len(r.left) > 0 { // signals left: it stays active, what it holds stays held; the confirmations are used
+			if err := useConfirmations(ctx, tx, p.confirmed, change); err != nil {
+				return changeResult{}, err
+			}
+			if err := m.audited(ctx, tx, e.operation(), e.requester, "release", dispositionType, r.disp.ID, "", p.basis); err != nil {
+				return changeResult{}, err
+			}
+			return changeResult{Outcome: "applied", Record: r.disp.ID,
+				NewRevision: &revisionRef{Domain: dispositionDomain, Value: strconv.FormatInt(r.disp.Revision, 10)}}, nil
+		}
+	}
 	units, err := m.units(ctx, tx)
 	if err != nil {
 		return changeResult{}, err

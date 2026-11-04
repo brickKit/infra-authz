@@ -69,6 +69,9 @@ func New(rt *runtime.Runtime) (*Module, error) {
 	}
 	// an account whose status changed: the closure job keeps the books of what it is a source of
 	changed := func(ctx context.Context, tx db.Tx, principal string) error {
+		if err := m.identitySignal(ctx, tx, principal); err != nil { // a freeze or a mark: a disposition (T6c)
+			return err
+		}
 		return m.closeAfter(ctx, tx, "account", principal)
 	}
 	m.accounts = &projection.Watermarked{Projection: projection.Projection{Name: Accounts, Changed: changed}, DB: rt.DB, Source: iam,
