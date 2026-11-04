@@ -64,6 +64,52 @@ type defined struct {
 	operations map[string]bool           // the operation keys its definitions declare
 }
 
+// relinquishFrom is the fixed relinquish segment's validity: from always (D82).
+const relinquishFrom = "2000-01-01T00:00:00.000000Z"
+
+// place adds a principal's segment in canonical form, with its source record and the definition it rests on.
+func place(segsOf map[string][]any, principal string, s sdkauthz.Segment, source, component string, defs defined) error {
+	s.Source = source
+	s.Definition, _ = json.Marshal(map[string]any{"owner_component": component, "kind": "resource",
+		"key": s.ResourceType, "version": defs.version, "digest": defs.digests[s.ResourceType]})
+	c, err := s.Canonical(s.ResourceType)
+	if err != nil {
+		return err
+	}
+	segsOf[principal] = append(segsOf[principal], c)
+	return nil
+}
+
+// holders are the principals holding an active grant or management holding, each with the first such record (the
+// source of its relinquish segment).
+func holders(ctx context.Context, tx db.Tx, grants []record) (map[string]string, error) {
+	holdings, err := active(ctx, tx, "management_holding")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	add := func(p, id string) {
+		if cur, ok := out[p]; p != "" && (!ok || id < cur) {
+			out[p] = id
+		}
+	}
+	for _, g := range grants {
+		var b grantBody
+		if err := json.Unmarshal(g.Body, &b); err != nil {
+			return nil, err
+		}
+		add(b.Grantee, g.ID)
+	}
+	for _, h := range holdings {
+		var b holdingBody
+		if err := json.Unmarshal(h.Body, &b); err != nil {
+			return nil, err
+		}
+		add(b.Holder, h.ID)
+	}
+	return out, nil
+}
+
 // usable: a segment of this component's resource types whose permission key is registered, not retired and still
 // defined by the component (security 08: only those take part in an effective segment).
 func (d defined) usable(s sdkauthz.Segment, reg registry) bool {
@@ -205,15 +251,30 @@ func (m *Module) view(ctx context.Context, tx db.Tx, component string) (raw []by
 			if !defs.usable(s, reg) {
 				continue
 			}
-			s.Source = g.ID
-			s.Definition, _ = json.Marshal(map[string]any{"owner_component": component, "kind": "resource",
-				"key": s.ResourceType, "version": defs.version, "digest": defs.digests[s.ResourceType]})
-			c, cerr := s.Canonical(s.ResourceType)
-			if cerr != nil {
-				err = cerr
+			if err = place(segsOf, b.Grantee, s, g.ID, component, defs); err != nil {
 				return
 			}
-			segsOf[b.Grantee] = append(segsOf[b.Grantee], c)
+		}
+	}
+	if component == ID { // D82: every holder may relinquish its own records; nobody grants it
+		var firstOf map[string]string
+		if firstOf, err = holders(ctx, tx, grants); err != nil {
+			return
+		}
+		self := map[string]sdkauthz.Atom{Holder: {Kind: "self"}}
+		for p, src := range firstOf {
+			for _, s := range []sdkauthz.Segment{ // to see one's own records, and relinquish them
+				{ResourceType: Records, Operation: OpRead, Atoms: self, ReadFields: []string{"body", "id", "record_type", "state"},
+					Valid: sdkauthz.Window{From: relinquishFrom}},
+				{ResourceType: Records, Operation: OpRelinquish, Atoms: self, Valid: sdkauthz.Window{From: relinquishFrom}},
+			} {
+				if !defs.usable(s, reg) {
+					continue
+				}
+				if err = place(segsOf, p, s, src, component, defs); err != nil {
+					return
+				}
+			}
 		}
 	}
 	principals := make([]string, 0, len(segsOf))

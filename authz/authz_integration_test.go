@@ -57,6 +57,7 @@ var orders = &sdkauthz.Definitions{Component: "demo/orders",
 const registryTSV = "kind\tkey\towner_component\n" +
 	"resource_type\tinfra.authz.security_record\tinfra/authz\nresource_type\tinfra.authz.system\tinfra/authz\n" +
 	"permission\tinfra.authz.security_record.read\tinfra/authz\npermission\tinfra.authz.security_record.change\tinfra/authz\n" +
+	"permission\tinfra.authz.security_record.relinquish\tinfra/authz\n" +
 	"permission\tinfra.authz.system.read\tinfra/authz\npermission\tinfra.authz.system.verify\tinfra/authz\n" +
 	"permission\tinfra.authz.system.submit\tinfra/authz\n" +
 	"resource_type\tdemo.order\tdemo/orders\npermission\tdemo.order.read\tdemo/orders\n" +
@@ -205,7 +206,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	submitChange(t, w, sectest.Alice, holdingReq("h1", eastID, sectest.Bob), 200)
 	authzSegs := []sdkauthz.Segment{}
 	for _, op := range []string{OpRead, OpChange} {
-		authzSegs = append(authzSegs, sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{},
+		authzSegs = append(authzSegs, sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{Holder: {Kind: "all"}},
 			ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}})
 	}
 	submitChange(t, w, sectest.Alice, grantReq("g0", root, sectest.Bob, authzSegs), 200)
@@ -354,6 +355,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	}
 	testEffective(t, w, admin, root, segmentsOf)
 	testUncomputable(t, w, admin, root, segmentsOf)
+	testRelinquish(t, w, admin, root)
 
 	// T3: the identity member's account status reaches the views (security 03's internal sources; P8.25)
 	again4 := submitChange(t, w, sectest.Alice, grantReq("b4", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
@@ -517,11 +519,13 @@ func listRecords(t *testing.T, w *sectest.World, who, typ string) []map[string]a
 }
 
 // waitForView waits until a principal's new grant on the member's own records is in the member's own view (it
-// verifies every 2.5 s).
+// verifies every 2.5 s): the units are seen through such a grant only (a holder sees its own records, D82; a unit
+// is nobody's).
 func waitForView(t *testing.T, w *sectest.World, who string) {
 	require.Eventually(t, func() bool {
-		code, _ := call(t, w, who, "GET", "/api/authz/records?type=grant", nil)
-		return code == 200
+		code, out := call(t, w, who, "GET", "/api/authz/records?type=management_unit", nil)
+		recs, _ := out["records"].([]any)
+		return code == 200 && len(recs) > 0
 	}, 10*time.Second, 200*time.Millisecond)
 }
 

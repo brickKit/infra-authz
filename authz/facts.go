@@ -347,6 +347,9 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 		if relinquish && !s.manages(unitOf) {
 			p.endReason = "relinquished"
 		}
+		if e.selfOnly { // a relinquishment: one's own record only, whatever else one manages
+			structural, p.endReason = relinquish, "relinquished"
+		}
 		if len(req.Candidate) > 0 { // a narrowing: a new content revision of the same record
 			if req.CandidateDigest != candidateDigest(t.Type, req.Candidate) {
 				return false, invalid("candidate_digest is not the candidate's digest"), nil

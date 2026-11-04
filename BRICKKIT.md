@@ -68,7 +68,9 @@
   | 路由 | 操作 | 说明 |
   | --- | --- | --- |
   | `POST /api/authz/changes` | `infra.authz.security_record.change` | 生效点，见下 |
-  | `GET /api/authz/records?type=` | `infra.authz.security_record.read` | 有效的安全记录 |
+  | `GET /api/authz/changes/{change_key}` | `infra.authz.security_record.change` 或 `.relinquish` | 按变更键查询结果（键在调用者自己的命名空间里；没有绑定的答 `unbound`） |
+  | `POST /api/authz/relinquishments` | `infra.authz.security_record.relinquish` | 放弃自己的一整条授予或管理持有资格（D82）：谁也不用授予，本组件给每个持有者一段固定的段 |
+  | `GET /api/authz/records?type=` | `infra.authz.security_record.read` | 调用者看得到的有效安全记录：管理者看全部，持有者只看自己的（维度 `holder`） |
 
 `POST /api/authz/changes` 的请求体带 `change_key` 与 `action`。`action` 取下面之一：
 

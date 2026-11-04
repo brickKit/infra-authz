@@ -69,6 +69,7 @@ type entry struct {
 	requester, trigger     string
 	req                    request
 	job                    *firing
+	selfOnly               bool // a relinquishment (D82): only the requester's own record
 }
 
 // plan is what the effect point writes for each outcome of one change.
@@ -88,6 +89,11 @@ type plan struct {
 
 // change runs one user change at the effect point.
 func (m *Module) change(ctx context.Context, requester string, req request) (changeResult, error) {
+	return m.changeAs(ctx, requester, req, false)
+}
+
+// changeAs is change; selfOnly a relinquishment (D82).
+func (m *Module) changeAs(ctx context.Context, requester string, req request, selfOnly bool) (changeResult, error) {
 	if req.ChangeKey == "" {
 		return changeResult{}, errs.New(errs.ReasonRequestInvalid, "change_key is required")
 	}
@@ -95,7 +101,8 @@ func (m *Module) change(ctx context.Context, requester string, req request) (cha
 	if err != nil {
 		return changeResult{}, err
 	}
-	e := entry{namespace: requester, key: req.ChangeKey, digest: digest, requester: requester, trigger: ByUser, req: req}
+	e := entry{namespace: requester, key: req.ChangeKey, digest: digest, requester: requester, trigger: ByUser, req: req,
+		selfOnly: selfOnly}
 	var res changeResult
 	err = m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
 		res, _, err = m.effect(ctx, tx, e)

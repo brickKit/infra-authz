@@ -107,26 +107,92 @@ func (m *Module) Services(s *grpcx.Services) error {
 func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/changes", Operation: OpChange, Handle: m.changeHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/changes/:key", Operation: OpChange, Handle: m.changeByKey})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/relinquishments", Operation: OpRelinquish, Handle: m.relinquishHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/records", Operation: OpRead, Handle: m.recordsHTTP})
 	return nil
 }
 
 func (m *Module) changeHTTP(c *httpx.Context) error {
 	s, _ := sdkauthz.From(c.Ctx())
-	ctx, _, err := s.Check(c.Ctx(), OpChange, sdkauthz.Facts{})
-	if err != nil {
-		return err
-	}
-	u, _ := identity.UserFrom(ctx)
 	var in request
 	if err := c.BindJSON(&in); err != nil {
 		return err
 	}
+	facts, err := m.holderFacts(c.Ctx(), in)
+	if err != nil {
+		return err
+	}
+	ctx, _, err := s.Check(c.Ctx(), OpChange, facts)
+	if err != nil {
+		return err
+	}
+	u, _ := identity.UserFrom(ctx)
 	res, err := m.change(ctx, u.Subject, in)
 	if err != nil {
 		return err
 	}
 	return answer(c, res)
+}
+
+// relinquishHTTP is a principal ending its own grant or holding (D82): a whole record, the requester its grantee or
+// holder; the effect point checks the rest as for any tightening.
+func (m *Module) relinquishHTTP(c *httpx.Context) error {
+	s, _ := sdkauthz.From(c.Ctx())
+	var in request
+	if err := c.BindJSON(&in); err != nil {
+		return err
+	}
+	if in.Direction != Tighten || in.Target == "" || in.Termination != "" || len(in.Candidate) > 0 {
+		return errs.New(errs.ReasonRequestInvalid, "a relinquishment ends one whole record: direction tighten and its target, nothing else")
+	}
+	facts, err := m.holderFacts(c.Ctx(), in)
+	if err != nil {
+		return err
+	}
+	ctx, _, err := s.Check(c.Ctx(), OpRelinquish, facts) // another's record: not visible, 404
+	if err != nil {
+		return err
+	}
+	u, _ := identity.UserFrom(ctx)
+	res, err := m.changeAs(ctx, u.Subject, in, true)
+	if err != nil {
+		return err
+	}
+	return answer(c, res)
+}
+
+// holderFacts are a change's facts for the holder dimension: whose its target is, or whose its candidate would be.
+func (m *Module) holderFacts(ctx context.Context, in request) (sdkauthz.Facts, error) {
+	var holder string
+	switch {
+	case in.Target != "":
+		if !uuidText.MatchString(in.Target) {
+			return sdkauthz.Facts{Holder: {State: "null"}}, nil
+		}
+		err := m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
+			var h *string
+			err := tx.QueryRow(ctx, "SELECT holder FROM authz_record WHERE id = $1", in.Target).Scan(&h)
+			if errors.Is(err, pgx.ErrNoRows) || h == nil {
+				return nil
+			}
+			holder = *h
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+	case len(in.Candidate) > 0:
+		var b struct {
+			Grantee string `json:"grantee"`
+			Holder  string `json:"holder"`
+		}
+		_ = json.Unmarshal(in.Candidate, &b)
+		holder = b.Grantee + b.Holder
+	}
+	if holder == "" {
+		return sdkauthz.Facts{Holder: {State: "null"}}, nil // a unit, a role revision, or no such record: nobody's
+	}
+	return sdkauthz.Facts{Holder: {State: "value", Value: holder}}, nil
 }
 
 // answer is a change result on the user surface: a rejection as its error; processing, awaiting confirmation and
@@ -144,11 +210,15 @@ func answer(c *httpx.Context, res changeResult) error {
 // changeByKey answers a query by change key (security 08: when a result is unknown, ask, do not submit again).
 func (m *Module) changeByKey(c *httpx.Context) error {
 	s, _ := sdkauthz.From(c.Ctx())
-	ctx, _, err := s.Check(c.Ctx(), OpChange, sdkauthz.Facts{})
+	u, _ := identity.UserFrom(c.Ctx())
+	// the key is in the caller's own namespace: those who may change records, or relinquish their own, may ask
+	own := sdkauthz.Facts{Holder: {State: "value", Value: u.Subject}}
+	ctx, _, err := s.Check(c.Ctx(), OpChange, own)
 	if err != nil {
-		return err
+		if ctx, _, err = s.Check(c.Ctx(), OpRelinquish, own); err != nil {
+			return err
+		}
 	}
-	u, _ := identity.UserFrom(ctx)
 	key := c.Param("key")
 	var bound []byte
 	err = m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
@@ -170,7 +240,7 @@ func (m *Module) changeByKey(c *httpx.Context) error {
 
 func (m *Module) recordsHTTP(c *httpx.Context) error {
 	s, _ := sdkauthz.From(c.Ctx())
-	ctx, _, err := s.Check(c.Ctx(), OpRead, sdkauthz.Facts{})
+	ctx, plan, err := s.List(c.Ctx(), OpRead, "r", 1) // $1 is the types; only the records the caller may see (its own, D82, or all)
 	if err != nil {
 		return err
 	}
@@ -180,11 +250,22 @@ func (m *Module) recordsHTTP(c *httpx.Context) error {
 	}
 	var out []map[string]any
 	err = m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
-		recs, err := active(ctx, tx, types...)
-		for _, r := range recs {
+		rows, err := tx.Query(ctx, `SELECT r.id::text, r.record_type, r.revision, r.body FROM authz_record r
+			WHERE r.state = 'active' AND r.record_type = ANY($1)
+				AND (r.valid_from IS NULL OR r.valid_from <= now()) AND (r.valid_until IS NULL OR r.valid_until > now())
+				AND (`+plan.Where+`) ORDER BY r.created_at, r.id`, append([]any{types}, plan.Args...)...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r record
+			if err := rows.Scan(&r.ID, &r.Type, &r.Revision, &r.Body); err != nil {
+				return err
+			}
 			out = append(out, map[string]any{"id": r.ID, "record_type": r.Type, "revision": r.Revision, "body": r.Body})
 		}
-		return err
+		return rows.Err()
 	})
 	if err != nil {
 		return err
@@ -228,7 +309,7 @@ func (m *Module) claim(ctx context.Context, tx db.Tx) error {
 	root, holding, grant := ids.New().String(), ids.New().String(), ids.New().String()
 	from := canon.Time(time.Now().Add(-time.Minute))
 	seg := func(op string) sdkauthz.Segment {
-		return sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{},
+		return sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{Holder: {Kind: "all"}},
 			ReadFields: []string{"body", "id", "record_type", "state"}, Valid: sdkauthz.Window{From: from}}
 	}
 	write := func(id, typ string, body any) error {

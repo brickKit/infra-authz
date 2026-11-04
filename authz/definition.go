@@ -25,9 +25,14 @@ const (
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.
 const (
-	Records        = "infra.authz.security_record"
-	OpRead         = "infra.authz.security_record.read"
-	OpChange       = "infra.authz.security_record.change"
+	Records  = "infra.authz.security_record"
+	OpRead   = "infra.authz.security_record.read"
+	OpChange = "infra.authz.security_record.change"
+	// OpRelinquish ends one's own grant or holding (D82): nobody grants it, the member's own view gives every holder a
+	// fixed segment of it
+	OpRelinquish = "infra.authz.security_record.relinquish"
+	// Holder is the records' principal dimension (D82)
+	Holder         = "holder"
 	System         = "infra.authz.system"
 	OpVerify       = "infra.authz.system.verify"
 	OpSubmit       = "infra.authz.system.submit"
@@ -87,9 +92,12 @@ func Keys() []config.Key {
 // Definitions are the member's own declarations: it guards its user surface with a view like any component.
 func Definitions() *sdkauthz.Definitions {
 	none := map[string]sdkauthz.Dimension{}
+	// holder: whose a record is (a grant's grantee, a holding's holder), so a principal may see and relinquish its own
+	// (D82); a manager's segments hold every holder
+	holder := map[string]sdkauthz.Dimension{Holder: {Kind: sdkauthz.Principal, Column: "holder", PrincipalRole: "holder"}}
 	return &sdkauthz.Definitions{Component: ID,
 		Resources: []sdkauthz.Resource{
-			{Type: Records, ViewOperation: OpRead, Dimensions: none, Fields: map[string]sdkauthz.Field{
+			{Type: Records, ViewOperation: OpRead, Dimensions: holder, Fields: map[string]sdkauthz.Field{
 				"id": {Class: sdkauthz.Ordinary}, "record_type": {Class: sdkauthz.Ordinary}, "state": {Class: sdkauthz.Ordinary},
 				"body": {Class: sdkauthz.Ordinary}}},
 			{Type: System, ViewOperation: SystemRead, Dimensions: none, Fields: map[string]sdkauthz.Field{}}},
@@ -97,6 +105,8 @@ func Definitions() *sdkauthz.Definitions {
 			{Key: OpRead, ResourceType: Records, Purpose: "read", RiskClass: "low"},
 			{Key: OpChange, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
 				Audit: true},
+			{Key: OpRelinquish, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
+				Audit: true, TighteningOnly: true},
 			{Key: SystemRead, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpVerify, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpSubmit, ResourceType: System, Purpose: "manage", RiskClass: "low", SideEffects: []string{"security_change"}},

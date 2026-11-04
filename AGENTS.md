@@ -7,7 +7,7 @@
 | 文件 | 内容 |
 | --- | --- |
 | `authz/definition.go` | 组件定义、配置键、本组件自己的资源与操作 |
-| `authz/module.go` | 系统面与用户面的注册、启动时的状态行与安装认领 |
+| `authz/module.go` | 系统面与用户面的注册（变更、按键查询、放弃本人的记录、读取）、`holder` 维度的事实、启动时的状态行与安装认领 |
 | `authz/submit.go` | `DefinitionService.Submit`：注册表、逐份校验、版本与幂等 |
 | `authz/view.go` | `ViewService.Verify`：按已提交的记录重新计算一个组件的分片（授予的有效段，只含注册了、未退役、属主仍定义着的权限键）；主体的账号状态取自身份来源的投影（`JudgeMany`），来源的水位年龄决定完整续发、只为普通读取续发或关闭 |
 | `authz/change.go` | 生效点的入口：用户的变更请求（09a 的 `be.security.change_request`）与作业都作为一次进入，在全部署的守卫下一个事务里：变更键的绑定、事实、决策表、按结果写入、绑定 |
