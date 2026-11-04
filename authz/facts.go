@@ -318,6 +318,9 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 	if req.ExpectedRevision != nil && req.ExpectedRevision.Value != strconv.FormatInt(t.Revision, 10) {
 		f.RevisionsChanged = true
 	}
+	if p.confirmed, err = m.confirmationsOf(ctx, tx, req.ConfirmationIDs, t, requester, f); err != nil {
+		return false, nil, err
+	}
 	unitOf, holderOf := recordUnit(t), recordHolder(t)
 	structural := false
 	switch {

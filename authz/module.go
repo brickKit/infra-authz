@@ -106,6 +106,7 @@ func (m *Module) Services(s *grpcx.Services) error {
 // Routes registers the user surface: the effect point and the records, guarded by this member's own view.
 func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/changes", Operation: OpChange, Handle: m.changeHTTP})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/confirmations", Operation: OpChange, Handle: m.confirmHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/changes/:key", Operation: OpChange, Handle: m.changeByKey})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/relinquishments", Operation: OpRelinquish, Handle: m.relinquishHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/records", Operation: OpRead, Handle: m.recordsHTTP})

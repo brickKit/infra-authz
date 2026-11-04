@@ -15,11 +15,11 @@ import (
 
 // target is the record a change is about, as the effect point reads it (locked).
 type target struct {
-	ID, Type, State, HoldReason, RequestedBy, Predecessor string
-	StateRevision, Revision                               int64
-	Body                                                  json.RawMessage
-	EffectiveAt, ValidFrom, ValidUntil                    *time.Time
-	Future                                                bool // effective_at is after the database's now
+	ID, Type, State, HoldReason, RequestedBy, Predecessor, CandidateDigest string
+	StateRevision, Revision                                                int64
+	Body                                                                   json.RawMessage
+	EffectiveAt, ValidFrom, ValidUntil                                     *time.Time
+	Future                                                                 bool // effective_at is after the database's now
 }
 
 var uuidText = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -29,11 +29,15 @@ func lockTarget(ctx context.Context, tx db.Tx, id string) (*target, error) {
 		return nil, nil
 	}
 	var t target
-	var hold, pred *string
+	var hold, pred, digest *string
 	err := tx.QueryRow(ctx, `SELECT id::text, record_type, state, hold_reason, requested_by, predecessor::text,
-			state_revision, revision, body, effective_at, valid_from, valid_until, coalesce(effective_at > now(), false)
+			state_revision, revision, body, effective_at, valid_from, valid_until, coalesce(effective_at > now(), false),
+			candidate_digest
 		FROM authz_record WHERE id = $1 FOR UPDATE`, id).Scan(&t.ID, &t.Type, &t.State, &hold, &t.RequestedBy, &pred,
-		&t.StateRevision, &t.Revision, &t.Body, &t.EffectiveAt, &t.ValidFrom, &t.ValidUntil, &t.Future)
+		&t.StateRevision, &t.Revision, &t.Body, &t.EffectiveAt, &t.ValidFrom, &t.ValidUntil, &t.Future, &digest)
+	if digest != nil {
+		t.CandidateDigest = *digest
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

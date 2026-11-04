@@ -161,6 +161,9 @@ func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change st
 			return res, err
 		}
 	}
+	if err := useConfirmations(ctx, tx, p.confirmed, change); err != nil {
+		return res, err
+	}
 	rev, err := m.applied(ctx, tx, e.requester, e.req.Direction, p.recTypeOr(), id)
 	if err != nil {
 		return res, err

@@ -79,10 +79,11 @@ type plan struct {
 	recType   string
 	body      any // the new record's or the narrowed content
 	target    *target
-	endReason string // what an applied tightening ends the target with ("": a narrowing)
-	activate  bool   // a saved widening (scheduled) that takes effect
-	restore   bool   // a held (uncomputable) record restored
-	review    bool   // applied, partly outside its limits: to be reviewed (row 30)
+	endReason string   // what an applied tightening ends the target with ("": a narrowing)
+	activate  bool     // a saved widening (scheduled) that takes effect
+	restore   bool     // a held (uncomputable) record restored
+	review    bool     // applied, partly outside its limits: to be reviewed (row 30)
+	confirmed []string // the confirmations to mark used when it applies
 	from, to  *time.Time
 	at        *time.Time // effective_from
 	successor string     // the predecessor that a new record supersedes

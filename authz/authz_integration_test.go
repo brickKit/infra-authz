@@ -91,6 +91,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	testSources(t, e.w, e.admin, e.root, e.segmentsOf)
 	testUncomputable(t, e.w, e.admin, e.root, e.segmentsOf)
 	testRelinquish(t, e.w, e.admin, e.root)
+	testConfirmations(t, e.w, e.admin, e.root)
 	e.identity()
 	e.audited()
 }
