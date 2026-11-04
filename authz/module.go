@@ -8,16 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/brickKit/be-sdk-go/v3/audit"
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
-	"github.com/brickKit/be-sdk-go/v3/canon"
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/errs"
 	"github.com/brickKit/be-sdk-go/v3/events"
 	"github.com/brickKit/be-sdk-go/v3/grpcx"
 	"github.com/brickKit/be-sdk-go/v3/httpx"
 	"github.com/brickKit/be-sdk-go/v3/identity"
-	"github.com/brickKit/be-sdk-go/v3/ids"
 	"github.com/brickKit/be-sdk-go/v3/projection"
 	"github.com/brickKit/be-sdk-go/v3/runtime"
 	authzv3 "github.com/brickKit/contract-infra-authz/v3/gen/go/be/authz/v3"
@@ -28,9 +25,9 @@ import (
 type Module struct {
 	authzv3.UnimplementedViewServiceServer
 	authzv3.UnimplementedDefinitionServiceServer
-	rt                              *runtime.Runtime
-	deployment, instance, bootstrap string
-	registryText                    func() string
+	rt                   *runtime.Runtime
+	deployment, instance string
+	registryText         func() string
 
 	mu      sync.Mutex
 	regText string
@@ -45,7 +42,6 @@ type Module struct {
 // New builds the module from its runtime.
 func New(rt *runtime.Runtime) (*Module, error) {
 	m := &Module{rt: rt, deployment: rt.Config.String("DEPLOYMENT_ID"), instance: rt.Config.String("AUTHZ_INSTANCE"),
-		bootstrap:    rt.Config.String("AUTHZ_BOOTSTRAP_ADMIN"),
 		registryText: func() string { return rt.Config.Secret("AUTHZ_REGISTRY").Value() }}
 	if m.deployment == "" {
 		return nil, errs.New(errs.ReasonRequestInvalid, "DEPLOYMENT_ID is required: views and definitions carry it")
@@ -127,6 +123,8 @@ func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/dispositions", Operation: OpDispRead, Handle: m.dispositionsHTTP})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/dispositions/:id/release", Operation: OpRelease, Handle: m.releaseHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/admin-state", Operation: OpDispRead, Handle: m.adminStateHTTP})
+	// the install claim: whoever presents what the claim names (claim.go); nobody is granted the operation
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/claim", Operation: OpClaim, Handle: m.claimHTTP})
 	// the administrator recovery: no token (no admin may be left); the recovery key's signature is the credential
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/recovery", Public: true, Handle: m.recoveryHTTP})
 	return nil
@@ -356,57 +354,9 @@ func (m *Module) Start(ctx context.Context) error {
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM authz_record WHERE record_type = 'management_holding'`).Scan(&holdings); err != nil {
 			return err
 		}
-		if holdings > 0 || m.bootstrap == "" {
+		if holdings > 0 {
 			return nil
 		}
-		return m.claim(ctx, tx)
+		return m.recordClaim(ctx, tx) // the install claim, consumed by its claimant (claim.go)
 	})
-}
-
-// claim is the install claim, simplified (security 08, "安装认领"): the configured principal becomes the first
-// authorization admin over a root unit, with a grant to read and change the security records.
-func (m *Module) claim(ctx context.Context, tx db.Tx) error {
-	root, holding, grant := ids.New().String(), ids.New().String(), ids.New().String()
-	from := canon.Time(time.Now().Add(-time.Minute))
-	seg := func(op string) sdkauthz.Segment {
-		return sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{Holder: {Kind: "all"}},
-			ReadFields: []string{"body", "id", "record_type", "state"}, Valid: sdkauthz.Window{From: from}}
-	}
-	disp := func(op string) sdkauthz.Segment { // the dispositions (A128): no dimensions
-		return sdkauthz.Segment{ResourceType: Dispositions, Operation: op, Atoms: map[string]sdkauthz.Atom{},
-			ReadFields: []string{"body", "id"}, Valid: sdkauthz.Window{From: from}}
-	}
-	write := func(id, typ string, body any) error {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO authz_record (id, record_type, state, body, requested_by) VALUES ($1, $2, 'active', $3, $4)`,
-			id, typ, b, ID); err != nil {
-			return err
-		}
-		return indexSources(ctx, tx, id, typ, b)
-	}
-	for _, w := range []struct {
-		id, typ string
-		body    any
-	}{
-		{root, "management_unit", unitBody{Name: "deployment", Root: true}},
-		{holding, "management_holding", holdingBody{Unit: root, Holder: m.bootstrap, SystemRole: "authorization_admin"}},
-		{grant, "grant", grantBody{Grantee: m.bootstrap, Segments: []sdkauthz.Segment{seg(OpRead), seg(OpChange), seg(OpTighten),
-			disp(OpDispRead), disp(OpDispose), disp(OpRelease)},
-			GovernanceUnit: root, IssuedBy: ID}},
-	} {
-		if err := write(w.id, w.typ, w.body); err != nil {
-			return err
-		}
-	}
-	if err := advance(ctx, tx); err != nil {
-		return err
-	}
-	m.rt.Logger.Warn("install claim: the configured principal is the first authorization admin", "principal", m.bootstrap)
-	_, err := m.rt.Audit.Write(ctx, tx, audit.Record{Category: audit.SecurityChange, Operation: OpChange,
-		Outcome: audit.Succeeded, Actor: ID, Target: map[string]any{"type": "management_holding", "id": holding},
-		Changes: map[string]any{"action": "install_claim", "holder": m.bootstrap}})
-	return err
 }

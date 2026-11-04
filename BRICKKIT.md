@@ -33,7 +33,7 @@
 - 包含证明里沿一个维度拆分；
 - `relation` 与 `record` 维度。
 
-安装认领做了简化：配置里的主体成为第一个授权管理员。
+安装认领：安装时记下的认领由认领人自己消耗一次（`POST /api/authz/claim`），绑定库的部署恢复代次，用旧备份恢复不会重新打开。
 
 ## 部署前准备
 
@@ -45,7 +45,7 @@
   - 本组件约 30 秒重读一次这个文件，退役在那之后的下一次核验生效；
   - 本组件自己的键也要在里面。
 - `AUTHZ_OWNER_KEY`（通常 `file://`）：部署所有者确认的公钥（Ed25519，PEM）。安装时用 `owner-sign -keygen` 生成密钥对，私钥交部署所有者离线保管。只有一名授权管理员时，新建管理单元与授出管理持有资格都要用它确认；没有配置时这类变更只能由另一名授权管理员确认。
-- `AUTHZ_BOOTSTRAP_ADMIN`：第一个授权管理员的平台主体，只在本组件还没有任何管理持有资格时使用。
+- `AUTHZ_INSTALL_CLAIM`（通常 `file://`）：安装认领，`principal:<平台主体>` 或 `code:sha256:<一次性确认码的摘要>`；第一次启动、还没有任何管理时记下，认领人登录后调 `POST /api/authz/claim`（确认码放在请求体的 `code`）成为第一个授权管理员，只能用一次；`AUTHZ_INSTALL_CLAIM_VALIDITY` 是有效期（起始 7 天）。
 - 部署的服务证书（`SERVICE_TLS_*`）。系统面只接受 mTLS，部署里每个组件都可以调用它的两个系统方法。
 - 身份：`IAM_ISSUER`、`IAM_JWKS_URL`、`DEPLOYMENT_ID`。
 - `AUTHZ_GRPC_URL` 指向本组件自己的系统面（`$endpoint:infra/authz:grpc`）。
@@ -65,7 +65,7 @@
 | --- | --- |
 | `AUTHZ_INSTANCE` | 本成员的实例身份 |
 | `AUTHZ_REGISTRY` | 注册表中的属主 |
-| `AUTHZ_BOOTSTRAP_ADMIN` | 安装认领 |
+| `AUTHZ_INSTALL_CLAIM`、`AUTHZ_INSTALL_CLAIM_VALIDITY` | 安装认领与它的有效期 |
 | `IAM_GRPC_URL`、`IAM_COMPONENT`（必填） | 身份成员的系统面与组件 ID：账号状态从这里补取与读取 |
 | `AUTHZ_SOURCE_HIGH`、`AUTHZ_SOURCE_READ` | `D_src_high`（起始 1 分钟，至多 5 分钟）与 `D_src_read`（起始 10 分钟，至多 1 小时，不短于前者）；调大即放宽撤权的上界，产品说明随之改写（安全 03） |
 | `AUTHZ_T_TIGHT` | `T_tight`（起始 1 小时）：身份来源停住时，一个人按最后已应用的事实办理收紧的水位年龄上限；超过后要第二人确认（安全 03） |

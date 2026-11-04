@@ -39,11 +39,15 @@ configSchema:
     AUDIT_GRPC_URL:
       description: 'process-level: the same for every member of a shell'
       type: string
-    AUTHZ_BOOTSTRAP_ADMIN:
-      description: 'the install claim: the platform principal (UUIDv7) that becomes the first authorization admin of a member without any management; ignored afterwards'
-      type: string
     AUTHZ_GRPC_URL:
       description: 'process-level: the same for every member of a shell'
+      type: string
+    AUTHZ_INSTALL_CLAIM:
+      description: 'the install claim (A130): principal:<platform principal> or code:sha256:<hex digest of a one-time code>; recorded at the first start without management, consumed once by its claimant on POST /api/authz/claim. Sensitive: a code''s digest is the claim (or AUTHZ_INSTALL_CLAIM_FILE)'
+      secret: true
+      type: string
+    AUTHZ_INSTALL_CLAIM_VALIDITY:
+      description: 'how long the install claim stays open after it is recorded: a duration; default 168h; a duration (e.g. 2s, 500ms); SDK default 604800s'
       type: string
     AUTHZ_INSTANCE:
       description: 'this member''s instance identity: generated once at installation (a UUID), kept with the deployment''s run files, never the same in two deployments; views carry it'

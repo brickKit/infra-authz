@@ -60,6 +60,7 @@ const registryTSV = "kind\tkey\towner_component\n" +
 	"permission\tinfra.authz.security_record.relinquish\tinfra/authz\n" +
 	"permission\tinfra.authz.system.read\tinfra/authz\npermission\tinfra.authz.system.verify\tinfra/authz\n" +
 	"permission\tinfra.authz.system.submit\tinfra/authz\n" +
+	"permission\tinfra.authz.system.claim\tinfra/authz\n" +
 	"resource_type\tdemo.order\tdemo/orders\npermission\tdemo.order.read\tdemo/orders\n" +
 	"resource_type\tdemo.invoice\tdemo/invoices\npermission\tdemo.invoice.read\tdemo/invoices\n" +
 	"permission\tdemo.invoice.export\tdemo/invoices\n"
@@ -170,7 +171,7 @@ func startE2E(t *testing.T) *e2e {
 	for k, v := range map[string]string{"COMPONENT_ID": ID, "COMPONENT_VERSION": Version, "PORT": itPort, "STOP_DRAIN_DELAY": "50ms",
 		"PG_HOST": "localhost", "PG_DATABASE": itDB, "PG_USER": "postgres", "PG_PASSWORD": pgPassword, "PG_SCHEMA": itSchema,
 		"PG_OWNER_USER": "postgres", "PG_OWNER_PASSWORD": pgPassword, "AUTHZ_INSTANCE": "authz-it-instance",
-		"AUTHZ_REGISTRY": registryTSV, "AUTHZ_BOOTSTRAP_ADMIN": sectest.Alice, "BUS_URL": busURL,
+		"AUTHZ_REGISTRY": registryTSV, "AUTHZ_INSTALL_CLAIM": "principal:" + sectest.Alice, "BUS_URL": busURL,
 		"IAM_GRPC_URL": "http://" + iamSystem, "IAM_COMPONENT": iamID, "AUTHZ_SOURCE_HIGH": "3s", "AUTHZ_SOURCE_READ": "6s",
 		"AUTHZ_T_TIGHT":      itTight.String(),
 		"AUTHZ_OWNER_KEY":    ownerPublicPEM(t),
@@ -204,6 +205,18 @@ func startE2E(t *testing.T) *e2e {
 		return err == nil && r.StatusCode == 200
 	}, 15*time.Second, 100*time.Millisecond, "the member submits to itself and verifies its own view")
 	require.True(t, ready)
+	// the install claim names Alice (A130): nobody else consumes it; she does, once (CP16)
+	claimAs := func(who string) int {
+		var code int
+		require.Eventually(t, func() bool { // the member's own view opens once the account projection is aligned
+			code, _ = call(t, w, who, "POST", "/api/authz/claim", map[string]any{})
+			return code != 503
+		}, 15*time.Second, 100*time.Millisecond)
+		return code
+	}
+	require.Equal(t, 403, claimAs(sectest.Bob), "not the claimant")
+	require.Equal(t, 200, claimAs(sectest.Alice))
+	require.Equal(t, 403, claimAs(sectest.Alice), "consumed")
 	waitForView(t, w, sectest.Alice) // the account projection aligned with the identity member: views renew
 
 	return &e2e{t: t, ctx: ctx, w: w, admin: admin, iam: iam, stopIAM: stopIAM, pgPassword: pgPassword, busURL: busURL}
