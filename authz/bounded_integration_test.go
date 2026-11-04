@@ -143,7 +143,7 @@ func (e *e2e) bounded() {
 	require.Equal(t, 200, code, "%v", dout)
 	// a unit's scope within its parent's has no grantee yet: self within self; self within a named set, or a named
 	// set within self, cannot be proven
-	unit("bd13", selves, "bd-selves-sub", entrySeg(self, anyone, anyone))
+	protectBy(t, w, sectest.Alice, judy, subUnitReq("bd13", selves, "bd-selves-sub", []sdkauthz.Segment{entrySeg(self, anyone, anyone)}, ops))
 	for key, c := range map[string][2]any{"bd14": {named, self}, "bd15": {selves, people(xavier)}} {
 		out := submitChange(t, w, sectest.Alice, unitReq(key, c[0], key, []sdkauthz.Segment{entrySeg(c[1].(sdkauthz.Atom), anyone, anyone)}, ops), 403)
 		assert.Contains(t, out["detail"], "unprovable", "%s: %v", key, out)
@@ -190,8 +190,8 @@ func (e *e2e) budgets(root string) {
 	u := protectBy(t, w, sectest.Alice, judy, unitReq("bb-u", root, "bb-u", []sdkauthz.Segment{entrySeg(people(filler), anyone, anyone)},
 		[]string{"demo.entry.read"}))["record"]
 	narrow := func(key, dept string) {
-		raw, _ := json.Marshal(map[string]any{"name": "bb-u", "parent": root, "managed_scope": []sdkauthz.Segment{entrySeg(people(filler), anyone, depts(dept))},
-			"grantable_operations": []string{"demo.entry.read"}})
+		raw, _ := json.Marshal(unitDefaults(map[string]any{"name": "bb-u", "parent": root, "managed_scope": []sdkauthz.Segment{entrySeg(people(filler), anyone, depts(dept))},
+			"grantable_operations": []string{"demo.entry.read"}}))
 		submitChange(t, w, sectest.Alice, map[string]any{"change_key": key, "direction": "tighten", "target": u,
 			"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 200)
 	}

@@ -113,6 +113,10 @@ func Keys() []config.Key {
 		// T_tight (security 03): how old the identity source's watermark may be for one person to tighten alone on the
 		// last applied facts
 		{Name: "AUTHZ_T_TIGHT", Type: config.Duration, Default: DefaultTight},
+		// the levels of management units below the root (security 04: the depth of re-delegation is the profile's
+		// explicit bound, A131): the root's max_subdelegation_depth when the install claim makes it, and no unit is made
+		// deeper
+		{Name: "AUTHZ_MAX_UNIT_DEPTH", Type: config.Integer, Default: int64(DefaultMaxUnitDepth)},
 	}
 }
 

@@ -142,6 +142,9 @@ func (m *Module) submitted(ctx context.Context, tx db.Tx, e entry, s standing, f
 		return false, invalid(bad), nil
 	}
 	if c.Predecessor != "" { // a renewal or a widening of an existing record: it supersedes it (security 08)
+		if u, ok := p.body.(unitBody); ok && underItself(s.units, u.Parent, c.Predecessor) {
+			return false, invalid("a management unit cannot be under the unit it supersedes"), nil
+		}
 		if err := m.supersedes(ctx, tx, c.Predecessor, false, f, p); err != nil {
 			return false, nil, err
 		}
@@ -264,8 +267,15 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 		if _, ok := s.units[b.Parent]; !ok {
 			return false, "no active parent unit " + b.Parent, nil, nil
 		}
+		if why := unitShape(b); why != "" {
+			return false, why, nil, nil
+		}
 		lim = s.limits.of(b.Parent)
-		structural, f.ManagementWiden, p.body, segs = s.manages(b.Parent), true, b, b.ManagedScope
+		// re-delegation is its own action, within the parent's actions and depth (A131)
+		structural, f.ManagementWiden, p.body, segs = s.managesWith(b.Parent, ActDelegate), true, b, b.ManagedScope
+		if why := delegation(s.units, b, m.maxDepth); why != "" {
+			f.Contained, p.whyNot = false, why
+		}
 		f.NeedsConfirmation = true // a protected operation: a new or enlarged management unit (security 08)
 		for _, op := range b.GrantableOperations {
 			if lim == nil || !lim.all && !slices.Contains(lim.ops, op) {
@@ -281,7 +291,7 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 		if b.SystemRole != "" && b.SystemRole != "authorization_admin" {
 			return false, "system role " + b.SystemRole + " is not in this version", nil, nil
 		}
-		structural = s.manages(b.Unit) && (b.SystemRole == "" || s.admin)
+		structural = s.managesWith(b.Unit, ActDelegate) && (b.SystemRole == "" || s.admin)
 		f.ManagementWiden, p.body = true, b
 		f.NeedsConfirmation = true // a protected operation: a management holding, a system role (security 08)
 	case "role_revision":
@@ -303,7 +313,11 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 			return false, "a grant needs a grantee and segments or a role revision", nil, nil
 		}
 		b.IssuedBy = requester
-		structural, p.body, segs, grantee = s.manages(b.GovernanceUnit), b, b.Segments, b.Grantee
+		action := ActGrant // a grant of segments; of a role revision, a binding (security 04)
+		if b.RoleRevision != "" {
+			action = ActBindRole
+		}
+		structural, p.body, segs, grantee = s.managesWith(b.GovernanceUnit, action), b, b.Segments, b.Grantee
 		lim = s.limits.ofFor(b.GovernanceUnit, grantee)
 	default:
 		return false, "record type " + recType + " is not in this version", nil, nil
@@ -388,7 +402,7 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 				return false, nil, err
 			}
 			f.TerminatorEligible = veto
-			structural, p.endReason = veto || s.manages(unitOf), "cancelled"
+			structural, p.endReason = veto || s.managesWith(unitOf, actionFor(t.Type)), "cancelled"
 		case "reject": // a confirmer's rejection (row 7): someone who may confirm it now, not the applicant, not its object
 			f.Rejection, f.FromState, p.endReason = true, f.FromState && t.State == "awaiting_confirmation", "rejected"
 			ok, err := m.confirmerEligible(ctx, tx, requester, false)
@@ -407,9 +421,10 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 		f.Kind = Tighten
 		f.FromState = t.State == "active" || t.State == "held"
 		relinquish := requester != "" && requester == holderOf
-		structural = relinquish || s.manages(unitOf) || (t.Type == "role_revision" && s.admin)
+		manages := s.managesWith(unitOf, actionFor(t.Type)) // revoke for a grant, delegate_management otherwise (A131)
+		structural = relinquish || manages || (t.Type == "role_revision" && s.admin)
 		p.endReason = "revoked"
-		if relinquish && !s.manages(unitOf) {
+		if relinquish && !manages {
 			p.endReason = "relinquished"
 		}
 		if e.selfOnly { // a relinquishment: one's own record only, whatever else one manages

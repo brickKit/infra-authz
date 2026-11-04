@@ -27,6 +27,8 @@
 
 包含证明（安全 07，3.0.21 起）：授予里的 `self` 按受授人判断，同一个 `self` 对不同的受授人结果不同；新建管理单元时还没有受授人，单元范围里的 `self` 只包含于父单元的 `self`。授予超出预算时驳回（`CONTAINMENT_NOT_PROVEN`，`detail` 写明哪项）：一份授予最多 8 段，一个值集合最多 1,000 个值，一个组织树原子最多 64 项，一个人在一个资源类型与操作上最多 64 段（生效与待生效的合计）。
 
+管理单元（3.0.21 起）必须写明 `management_actions`（`grant`、`revoke`、`edit_role`、`bind_role`、`delegate_management`、`share_governance` 中的几项）与 `max_subdelegation_depth`（下面还能再分几层）：持有单元的人在它及以下只能做它与它以上每个单元都列出的动作；子单元的动作不多于父单元、层数小于父单元；根单元的层数是 `AUTHZ_MAX_UNIT_DEPTH`（起始 6）。
+
 3.0.20 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
 - 严格路径（A、B 档）；
 - 成员切换；

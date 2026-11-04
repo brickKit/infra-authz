@@ -52,6 +52,9 @@ configSchema:
     AUTHZ_INSTANCE:
       description: 'this member''s instance identity: generated once at installation (a UUID), kept with the deployment''s run files, never the same in two deployments; views carry it'
       type: string
+    AUTHZ_MAX_UNIT_DEPTH:
+      description: 'the levels of management units below the root (security 04, A131): the root unit''s max_subdelegation_depth when the install claim makes it, and no unit is made deeper; 1 or more; SDK default 6'
+      type: integer
     AUTHZ_OWNER_KEY:
       description: 'the deployment owner''s confirmation key (A124): an Ed25519 public key in PEM; its private key is kept offline by the owner and signs owner confirmations; absent, no owner confirmation is accepted. Not sensitive: a secret key so that file:// delivers it (or AUTHZ_OWNER_KEY_FILE)'
       secret: true

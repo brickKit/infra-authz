@@ -30,8 +30,8 @@ func testUncomputable(t *testing.T, w *sectest.World, admin *pgx.Conn, root stri
 		require.NoError(t, err)
 	}
 	narrowUnit := func(key string, unit any, name string, regions ...string) {
-		raw, _ := json.Marshal(map[string]any{"name": name, "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region(regions...))},
-			"grantable_operations": ops})
+		raw, _ := json.Marshal(unitDefaults(map[string]any{"name": name, "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region(regions...))},
+			"grantable_operations": ops}))
 		submitChange(t, w, sectest.Alice, map[string]any{"change_key": key, "direction": "tighten", "target": unit,
 			"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 200)
 	}

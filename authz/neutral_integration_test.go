@@ -76,7 +76,7 @@ func testNeutral(t *testing.T, w *sectest.World, admin *pgx.Conn, root, east str
 	gone := protect(t, w, sectest.Alice, unitReq("n5", root, "short-lived", []sdkauthz.Segment{orderSeg(region("east"))}, []string{}))
 	submitChange(t, w, sectest.Alice, tightenReq("n5r", gone["record"]), 200)
 	late := map[string]any{"name": "too late", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region("east"))}, "grantable_operations": []string{}}
-	raw, _ := json.Marshal(late)
+	raw, _ := json.Marshal(unitDefaults(late))
 	stale := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "n6", "direction": "neutral", "target": gone["record"],
 		"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 409)
 	assert.Equal(t, "CHANGE_REVISION_STALE", stale["reason"])

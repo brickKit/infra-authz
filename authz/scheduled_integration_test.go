@@ -173,7 +173,7 @@ func testScheduled(t *testing.T, w *sectest.World, admin *pgx.Conn, root, east s
 	lim := protect(t, w, sectest.Alice, unitReq("d9", root, "lim82", []sdkauthz.Segment{orderSeg(region("east", "west"))}, ops))
 	west := submitChange(t, w, sectest.Alice, scheduledGrant("d9w", lim["record"], carol, []sdkauthz.Segment{orderSeg(region("west"))}, 2*time.Second), 202)
 	stays := submitChange(t, w, sectest.Alice, scheduledGrant("d9e", lim["record"], carol, seg, 2*time.Second), 202)
-	limRaw, _ := json.Marshal(map[string]any{"name": "lim82", "parent": root, "managed_scope": seg, "grantable_operations": ops})
+	limRaw, _ := json.Marshal(unitDefaults(map[string]any{"name": "lim82", "parent": root, "managed_scope": seg, "grantable_operations": ops}))
 	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "d9n", "direction": "tighten", "target": lim["record"],
 		"candidate": json.RawMessage(limRaw), "candidate_digest": candidateDigest("management_unit", limRaw)}, 200)
 	require.Eventually(t, func() bool {

@@ -37,6 +37,7 @@ type Module struct {
 	// and D_src_read, tight is T_tight (security 03)
 	accounts                *projection.Watermarked
 	srcHigh, srcRead, tight time.Duration
+	maxDepth                int // AUTHZ_MAX_UNIT_DEPTH (A131)
 }
 
 // New builds the module from its runtime.
@@ -57,6 +58,9 @@ func New(rt *runtime.Runtime) (*Module, error) {
 	}
 	if m.tight = rt.Config.Duration("AUTHZ_T_TIGHT"); m.tight <= 0 {
 		return nil, errs.New(errs.ReasonRequestInvalid, fmt.Sprintf("AUTHZ_T_TIGHT (%s) is above zero", m.tight))
+	}
+	if m.maxDepth = int(rt.Config.Int("AUTHZ_MAX_UNIT_DEPTH")); m.maxDepth < 1 {
+		return nil, errs.New(errs.ReasonRequestInvalid, fmt.Sprintf("AUTHZ_MAX_UNIT_DEPTH (%d) is 1 or more", m.maxDepth))
 	}
 	iam := rt.Config.String("IAM_COMPONENT")
 	conn, ok := rt.GRPCAt(iam, rt.Config.String("IAM_GRPC_URL"))

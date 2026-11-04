@@ -136,7 +136,8 @@ func (m *Module) claim(ctx context.Context, tx db.Tx, holder string) error {
 		id, typ string
 		body    any
 	}{
-		{root, "management_unit", unitBody{Name: "deployment", Root: true}},
+		{root, "management_unit", unitBody{Name: "deployment", Root: true, ManagementActions: allActions,
+			MaxSubdelegationDepth: &m.maxDepth}},
 		{holding, "management_holding", holdingBody{Unit: root, Holder: holder, SystemRole: "authorization_admin"}},
 		{grant, "grant", grantBody{Grantee: holder, Segments: []sdkauthz.Segment{seg(OpRead), seg(OpChange), seg(OpTighten),
 			disp(OpDispRead), disp(OpDispose), disp(OpRelease)},

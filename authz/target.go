@@ -116,8 +116,14 @@ func narrows(t *target, raw json.RawMessage) (any, bool) {
 		var cur, next unitBody
 		_ = json.Unmarshal(t.Body, &cur)
 		if json.Unmarshal(raw, &next) != nil || next.Parent != cur.Parent || next.Name != cur.Name || cur.Root ||
-			!coversAll(cur.ManagedScope, next.ManagedScope) {
+			!coversAll(cur.ManagedScope, next.ManagedScope) || unitShape(next) != "" ||
+			cur.MaxSubdelegationDepth != nil && *next.MaxSubdelegationDepth > *cur.MaxSubdelegationDepth {
 			return nil, false
+		}
+		for _, a := range next.ManagementActions { // fewer actions, a smaller depth: a narrowing too (A131)
+			if !slices.Contains(cur.ManagementActions, a) {
+				return nil, false
+			}
 		}
 		for _, op := range next.GrantableOperations {
 			if !slices.Contains(cur.GrantableOperations, op) {

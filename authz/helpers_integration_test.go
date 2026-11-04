@@ -106,6 +106,9 @@ func portFree(t *testing.T, addrs ...string) {
 // grantReq, unitReq and holdingReq are widenings with their candidate (09a's be.security.change_request); tightenReq
 // ends its target.
 func widenReq(key, recordType string, candidate map[string]any) map[string]any {
+	if recordType == "management_unit" {
+		unitDefaults(candidate)
+	}
 	candidate["record_type"] = recordType
 	raw, _ := json.Marshal(candidate)
 	return map[string]any{"change_key": key, "direction": "widen", "candidate": json.RawMessage(raw),
@@ -119,6 +122,29 @@ func grantReq(key string, unit, grantee any, segs []sdkauthz.Segment) map[string
 func unitReq(key string, parent any, name string, scope []sdkauthz.Segment, ops []string) map[string]any {
 	return widenReq(key, "management_unit", map[string]any{"parent": parent, "name": name, "managed_scope": scope,
 		"grantable_operations": ops})
+}
+
+// subUnitReq is a unit two levels down: below a unit of the default depth.
+func subUnitReq(key string, parent any, name string, scope []sdkauthz.Segment, ops []string) map[string]any {
+	return widenReq(key, "management_unit", map[string]any{"parent": parent, "name": name, "managed_scope": scope,
+		"grantable_operations": ops, "max_subdelegation_depth": unitDepth - 1})
+}
+
+// unitDepth and unitActions are a unit's when a test does not say (A131): under the root (6 levels), with every
+// action but the admins' role editing and the shares this version does not have.
+const unitDepth = 3
+
+var unitActions = []string{ActGrant, ActRevoke, ActBindRole, ActDelegate}
+
+// unitDefaults fills a unit's body with the default actions and depth where it has none.
+func unitDefaults(body map[string]any) map[string]any {
+	if _, ok := body["management_actions"]; !ok {
+		body["management_actions"] = unitActions
+	}
+	if _, ok := body["max_subdelegation_depth"]; !ok {
+		body["max_subdelegation_depth"] = unitDepth
+	}
+	return body
 }
 
 func holdingReq(key string, unit any, holder string) map[string]any {

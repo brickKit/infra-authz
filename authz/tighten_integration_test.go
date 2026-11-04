@@ -96,7 +96,7 @@ func (e *e2e) staleTightening() {
 			50*time.Millisecond, "confirmed by Bob: applied")
 	}
 	confirmed(unit["record"])
-	sub := submitChange(t, w, sectest.Alice, unitReq("st2s", unit["record"], "stale-sub", seg, []string{"demo.order.read"}), 202)
+	sub := submitChange(t, w, sectest.Alice, subUnitReq("st2s", unit["record"], "stale-sub", seg, []string{"demo.order.read"}), 202)
 	confirmed(sub["record"])
 	graceAdmin := submitChange(t, w, sectest.Alice, widenReq("st3", "management_holding",
 		map[string]any{"unit": sub["record"], "holder": grace, "system_role": "authorization_admin"}), 202)

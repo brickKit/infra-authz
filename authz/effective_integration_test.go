@@ -43,14 +43,14 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 	ops := []string{"demo.order.read"}
 	require.Empty(t, segmentsOf(carol), "the precondition: carol holds no grant")
 	wide := protect(t, w, sectest.Alice, unitReq("ef1", root, "wide", []sdkauthz.Segment{orderSeg(region("east", "west", "north"))}, ops))
-	sub := protect(t, w, sectest.Alice, unitReq("ef2", wide["record"], "wide-sub", []sdkauthz.Segment{orderSeg(region("east", "west"))}, ops))
+	sub := protect(t, w, sectest.Alice, subUnitReq("ef2", wide["record"], "wide-sub", []sdkauthz.Segment{orderSeg(region("east", "west"))}, ops))
 	g := submitChange(t, w, sectest.Alice, grantReq("ef3", sub["record"], carol, []sdkauthz.Segment{orderSeg(region("east", "west"))}), 200)
 	assert.Equal(t, [][]string{{"east", "west"}}, regionsOf(segmentsOf(carol)))
 
 	narrowWide := func(key string, regions ...string) {
 		body := map[string]any{"name": "wide", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region(regions...))},
 			"grantable_operations": ops}
-		raw, _ := json.Marshal(body)
+		raw, _ := json.Marshal(unitDefaults(body))
 		submitChange(t, w, sectest.Alice, map[string]any{"change_key": key, "direction": "tighten", "target": wide["record"],
 			"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 200)
 	}
@@ -144,8 +144,8 @@ func testSources(t *testing.T, w *sectest.World, admin *pgx.Conn, root string, s
 	byHolder := submitChange(t, w, sectest.Bob, grantReq("efs6", renewed["record"], carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
 	assert.Equal(t, "applied", byHolder["outcome"], "Bob's holding of the old unit is a holding of the renewed one")
 	// the renewed unit narrows: its closure reaches what names the old ID too
-	raw, _ := json.Marshal(map[string]any{"name": "renewable", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region("east"))},
-		"grantable_operations": []string{"demo.order.read"}})
+	raw, _ := json.Marshal(unitDefaults(map[string]any{"name": "renewable", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region("east"))},
+		"grantable_operations": []string{"demo.order.read"}}))
 	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "efs7", "direction": "tighten", "target": renewed["record"],
 		"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 200)
 	require.Eventually(t, func() bool { return recordOf(t, admin, wider["record"]).State == "ended" }, 10*time.Second, 100*time.Millisecond,
@@ -177,8 +177,8 @@ func testSources(t *testing.T, w *sectest.World, admin *pgx.Conn, root string, s
 	})
 	var since time.Time
 	require.NoError(t, admin.QueryRow(ctx, "SELECT now()").Scan(&since))
-	raw, _ = json.Marshal(map[string]any{"name": "other", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region("east"))},
-		"grantable_operations": []string{"demo.order.read"}})
+	raw, _ = json.Marshal(unitDefaults(map[string]any{"name": "other", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region("east"))},
+		"grantable_operations": []string{"demo.order.read"}}))
 	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "efx1", "direction": "tighten", "target": other["record"],
 		"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 200)
 	require.Eventually(t, func() bool {
