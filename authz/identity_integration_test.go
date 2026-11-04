@@ -44,12 +44,21 @@ func (*iamModule) Routes(*httpx.Routes) error { return nil }
 
 // set writes an account's status and sends it, as an identity member does on a security change (P8.27).
 func (m *iamModule) set(ctx context.Context, principal, status string, version int64) error {
-	raw, _, err := records.Seal("be.security.account_status", map[string]any{
+	return m.setMarked(ctx, principal, status, "", version)
+}
+
+// setMarked is set with a security mark (compromised, suspicious; security 09a).
+func (m *iamModule) setMarked(ctx context.Context, principal, status, mark string, version int64) error {
+	rec := map[string]any{
 		"record_type": "be.security.account_status", "schema": "1.0", "deployment": m.rt.Config.String("DEPLOYMENT_ID"),
 		"authority": iamID, "id": principal,
 		"revision": map[string]any{"domain": AccountStream.Name, "value": strconv.FormatInt(version, 10)},
 		"account":  map[string]any{"deployment": m.rt.Config.String("DEPLOYMENT_ID"), "kind": "user", "id": principal},
-		"status":   status, "security_version": version})
+		"status":   status, "security_version": version}
+	if mark != "" {
+		rec["security_mark"] = mark
+	}
+	raw, _, err := records.Seal("be.security.account_status", rec)
 	if err != nil {
 		return err
 	}

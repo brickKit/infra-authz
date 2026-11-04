@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/brickKit/be-sdk-go/v3/audit"
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/db"
+	"github.com/brickKit/be-sdk-go/v3/projection"
 	"github.com/brickKit/be-sdk-go/v3/work"
 	"github.com/jackc/pgx/v5"
 )
@@ -93,13 +95,23 @@ func (m *Module) closure(ctx context.Context, r *work.Run) error {
 	if err := json.Unmarshal(r.Args, &a); err != nil || dependentTypes[a.Kind] == nil {
 		return work.Permanent(fmt.Errorf("not a closure: %s", r.Args))
 	}
-	return r.Complete(ctx, func(ctx context.Context, tx db.Tx) error {
+	err := r.Complete(ctx, func(ctx context.Context, tx db.Tx) error {
 		if _, err := tx.Exec(ctx, "SELECT 1 FROM authz_state FOR UPDATE"); err != nil {
 			return err
 		}
 		w, err := m.world(ctx, tx)
 		if err != nil {
 			return err
+		}
+		if a.Kind == "account" {
+			ended, provable, err := m.accountEnded(ctx, tx, a.Ref)
+			if err != nil {
+				return err
+			}
+			if !provable { // the books wait for the source to prove it (the view already does without it)
+				return errAccountUnprovable
+			}
+			w.ended[a.Ref] = ended
 		}
 		ids, err := m.dependents(ctx, tx, a, w)
 		if err != nil {
@@ -112,6 +124,37 @@ func (m *Module) closure(ctx context.Context, r *work.Run) error {
 		}
 		return nil
 	})
+	if errors.Is(err, errAccountUnprovable) {
+		return work.Wait(err)
+	}
+	return err
+}
+
+var errAccountUnprovable = errors.New("the account's status cannot be proven yet")
+
+// accountEnded: the identity source proves the account ended as a source (security 08's closure: an account
+// disabled, or no longer there). A frozen account, or one disabled with a security mark, is an identity-side
+// disposition (it holds, it ends nothing: T6); provable false when the source cannot prove it now.
+func (m *Module) accountEnded(ctx context.Context, tx db.Tx, principal string) (ended, provable bool, err error) {
+	j, err := m.accounts.JudgeMany(ctx, tx, map[string][]string{principal: {principal}}, m.srcHigh)
+	if err != nil {
+		return false, false, err
+	}
+	switch jd := j.Records[principal]; jd.Verdict {
+	case projection.ProvablyAbsent:
+		return true, true, nil
+	case projection.Usable:
+		var rec struct {
+			Status       string `json:"status"`
+			SecurityMark string `json:"security_mark"`
+		}
+		if err := json.Unmarshal(jd.Data, &rec); err != nil {
+			return false, false, err
+		}
+		mark := rec.SecurityMark == "compromised" || rec.SecurityMark == "suspicious"
+		return rec.Status == "disabled" && !mark, true, nil
+	}
+	return false, false, nil
 }
 
 // dependents are the records a source's change may affect: by the index, or, when the index of its kind is not
@@ -157,6 +200,7 @@ type sources struct {
 	units  map[string]unitBody
 	limits *limits
 	roles  map[string]bool
+	ended  map[string]bool // accounts proven ended (an account's closure)
 }
 
 func (m *Module) world(ctx context.Context, tx db.Tx) (sources, error) {
@@ -168,7 +212,7 @@ func (m *Module) world(ctx context.Context, tx db.Tx) (sources, error) {
 	if err != nil {
 		return sources{}, err
 	}
-	w := sources{units: units, limits: newLimits(units), roles: map[string]bool{}}
+	w := sources{units: units, limits: newLimits(units), roles: map[string]bool{}, ended: map[string]bool{}}
 	for _, r := range roles {
 		w.roles[r.ID] = true
 	}
@@ -187,7 +231,7 @@ func assess(t *target, w sources) booked {
 	case "grant":
 		var b grantBody
 		_ = json.Unmarshal(t.Body, &b)
-		if b.RoleRevision != "" && !w.roles[b.RoleRevision] {
+		if b.RoleRevision != "" && !w.roles[b.RoleRevision] || w.ended[b.Grantee] {
 			return booked{state: "ended", endReason: "source_ended"}
 		}
 		return assessWithin(w, b.GovernanceUnit, b.Segments, b.Grantee)
@@ -201,7 +245,7 @@ func assess(t *target, w sources) booked {
 	case "management_holding":
 		var b holdingBody
 		_ = json.Unmarshal(t.Body, &b)
-		if w.limits.of(b.Unit) == nil {
+		if w.limits.of(b.Unit) == nil || w.ended[b.Holder] {
 			return booked{state: "ended", endReason: "source_ended"}
 		}
 	}
@@ -252,4 +296,49 @@ func (m *Module) keepBooks(ctx context.Context, tx db.Tx, w sources, id string) 
 		return m.closeAfter(ctx, tx, t.Type, id) // its effective limit moved with its parent's
 	}
 	return nil
+}
+
+// JobExpiry ends a record when its validity ends (security 08: access stops at evaluation already; the state is the
+// closure's bookkeeping): a timed item due at valid_until, registered with the record (P7.24).
+const JobExpiry = "infra.authz.expiry"
+
+type expiring struct {
+	Record string `json:"record"`
+}
+
+// expireAt registers a record's expiry, in the record's transaction.
+func (m *Module) expireAt(ctx context.Context, tx db.Tx, id string, until *time.Time) error {
+	if until == nil {
+		return nil
+	}
+	_, err := m.rt.Work.EnqueueAt(ctx, tx, JobExpiry, expiring{Record: id}, *until)
+	return err
+}
+
+func (m *Module) expiry(ctx context.Context, r *work.Run) error {
+	var a expiring
+	if err := json.Unmarshal(r.Args, &a); err != nil {
+		return work.Permanent(fmt.Errorf("not an expiry: %s", r.Args))
+	}
+	return r.Complete(ctx, func(ctx context.Context, tx db.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT 1 FROM authz_state FOR UPDATE"); err != nil {
+			return err
+		}
+		var due bool
+		err := tx.QueryRow(ctx, `SELECT valid_until <= now() FROM authz_record WHERE id = $1 AND state IN ('active', 'held')
+			AND valid_until IS NOT NULL FOR UPDATE`, a.Record).Scan(&due)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && !due {
+			return nil // ended meanwhile, or not yet (never earlier than its validity)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := m.transition(ctx, tx, a.Record, "ended", "expired", "", "", ""); err != nil {
+			return err
+		}
+		_, err = m.rt.Audit.Write(ctx, tx, audit.Record{Category: audit.SecurityChange, Operation: OpChange,
+			Outcome: audit.Succeeded, Actor: ID, Target: map[string]any{"id": a.Record},
+			Changes: map[string]any{"closure": "ended", "reason": "expired"}})
+		return err
+	})
 }

@@ -42,6 +42,8 @@ const (
 	itSchema  = "authz_it"
 	itDB      = "brickkit_test_db"
 	carol     = "0190f3a1-0000-7000-8000-0000000000c3"
+	dave      = "0190f3a1-0000-7000-8000-0000000000d4"
+	eve       = "0190f3a1-0000-7000-8000-0000000000e5"
 	busSchema = "authz_it_bus"
 )
 
@@ -97,7 +99,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	w := sectest.New(t)
 	portFree(t, itPort, itSystem)
 	iam, stopIAM := startIAM(t, w, pgPassword, busURL, true)
-	for _, p := range []string{sectest.Alice, sectest.Bob, carol} {
+	for _, p := range []string{sectest.Alice, sectest.Bob, carol, dave, eve} {
 		require.NoError(t, iam.set(ctx, p, "active", 1))
 	}
 	env := w.Env(t, ID)
@@ -370,9 +372,31 @@ func TestMemberEndToEnd(t *testing.T) {
 	assert.False(t, e.AccountsDisabled)
 	require.NoError(t, iam.set(ctx, carol, "active", 2)) // a password change at the identity member
 	carolNow(func(e sdkauthz.SubjectEntry) bool { return e.SecurityVersion == 2 })
-	require.NoError(t, iam.set(ctx, carol, "disabled", 3))
+	// frozen: no access (the view says so), but nothing ends; an identity-side disposition holds it (T6)
+	require.NoError(t, iam.set(ctx, carol, "security_frozen", 3))
 	e = carolNow(func(e sdkauthz.SubjectEntry) bool { return e.AccountsDisabled })
 	assert.EqualValues(t, 3, e.SecurityVersion)
+
+	// disabled: the account ended as a source; the closure job ends what it was a source of (security 08), a grant
+	// and a holding, once its status is applied
+	daves := submitChange(t, w, sectest.Alice, grantReq("dv1", root, dave, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
+	daveHolds := submitChange(t, w, sectest.Alice, holdingReq("dv2", eastID, dave), 200)
+	eves := submitChange(t, w, sectest.Alice, grantReq("dv3", root, eve, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
+	require.NoError(t, iam.setMarked(ctx, eve, "disabled", "compromised", 2)) // a disposition (T6), not the source's end
+	require.NoError(t, iam.set(ctx, dave, "disabled", 2))
+	require.Eventually(t, func() bool {
+		return recordOf(t, admin, daves["record"]).State == "ended" && recordOf(t, admin, daveHolds["record"]).State == "ended"
+	}, 10*time.Second, 100*time.Millisecond, "the books of a disabled account")
+	assert.Equal(t, "source_ended", recordOf(t, admin, daves["record"]).EndReason)
+	assert.Equal(t, "source_ended", recordOf(t, admin, daveHolds["record"]).EndReason)
+	assert.Equal(t, "active", recordOf(t, admin, again4["record"]).State, "carol is frozen, not disabled: her grant stays")
+	require.Eventually(t, func() bool { // two statuses applied (her first, then disabled): two closures, both done
+		var all, done int
+		_ = admin.QueryRow(ctx, "SELECT count(*), count(*) FILTER (WHERE state = 'done') FROM "+itSchema+
+			".be_work_item WHERE job = $1 AND args->>'ref' = $2", JobClosure, eve).Scan(&all, &done)
+		return all >= 2 && done == all
+	}, 10*time.Second, 100*time.Millisecond, "eve's closures ran")
+	assert.Equal(t, "active", recordOf(t, admin, eves["record"]).State, "disabled as compromised: a disposition, nothing ends")
 
 	// Bob's security change: tokens issued before are stale at the member's own surface; one of the new version passes
 	require.NoError(t, iam.set(ctx, sectest.Bob, "active", 2))

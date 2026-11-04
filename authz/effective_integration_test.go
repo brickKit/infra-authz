@@ -124,6 +124,17 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 	submitChange(t, w, sectest.Alice, tightenReq("efs4", under["record"]), 200)
 	submitChange(t, w, sectest.Alice, tightenReq("efs5", byHolder["record"]), 200)
 
+	// a record's validity ends: no access at once (evaluation), then its expiry item ends it expired (bookkeeping)
+	short := widenReq("efe", "grant", map[string]any{"governance_unit": root, "grantee": carol,
+		"segments": []sdkauthz.Segment{orderSeg(region("east"))},
+		"valid":    map[string]any{"from": "2026-01-01T00:00:00.000000Z", "until": time.Now().Add(2 * time.Second).UTC().Format(time.RFC3339Nano)}})
+	brief := submitChange(t, w, sectest.Alice, short, 200)
+	assert.Equal(t, [][]string{{"east"}}, regionsOf(segmentsOf(carol)))
+	require.Eventually(t, func() bool { return recordOf(t, admin, brief["record"]).State == "ended" }, 10*time.Second,
+		100*time.Millisecond, "expired")
+	assert.Equal(t, recordState{State: "ended", EndReason: "expired", Revision: 1, StateRev: 2}, recordOf(t, admin, brief["record"]))
+	assert.Empty(t, segmentsOf(carol))
+
 	// an index that cannot say who is affected is not "nobody": the closure scans, and the source domain is marked
 	// for review
 	other := submitChange(t, w, sectest.Alice, unitReq("efx", root, "other", []sdkauthz.Segment{orderSeg(region("east", "west"))},

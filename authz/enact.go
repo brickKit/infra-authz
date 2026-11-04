@@ -178,7 +178,13 @@ func (m *Module) insert(ctx context.Context, tx db.Tx, e entry, p plan, state, e
 		p.at, p.from, p.to, why, e.namespace+":"+e.key); err != nil {
 		return "", err
 	}
-	return id, indexSources(ctx, tx, id, p.recType, body)
+	if err := indexSources(ctx, tx, id, p.recType, body); err != nil {
+		return "", err
+	}
+	if state == "ended" {
+		return id, nil
+	}
+	return id, m.expireAt(ctx, tx, id, p.to)
 }
 
 // transition moves a record to state (with its end or hold reason, and a rejection's reason), advancing its state
