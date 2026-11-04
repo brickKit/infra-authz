@@ -129,6 +129,17 @@ func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change st
 		if _, err := m.transition(ctx, tx, p.successor, "ended", "superseded", "", change, ""); err != nil {
 			return res, err
 		}
+		if p.recTypeOr() == "management_unit" { // what was under the old unit is under no active unit now
+			if err := m.closeAfter(ctx, tx, "management_unit", p.successor); err != nil {
+				return res, err
+			}
+		}
+	}
+	// a source that tightened (ended or narrowed): the closure job keeps the books of what depends on it
+	if t := p.target; t != nil && !p.activate && (t.Type == "management_unit" || t.Type == "role_revision") {
+		if err := m.closeAfter(ctx, tx, t.Type, t.ID); err != nil {
+			return res, err
+		}
 	}
 	rev, err := m.applied(ctx, tx, e.requester, e.req.Direction, p.recTypeOr(), id)
 	if err != nil {
@@ -161,11 +172,13 @@ func (m *Module) insert(ctx context.Context, tx db.Tx, e entry, p plan, state, e
 	if endReason != "" {
 		end, why = endReason, reason
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO authz_record (id, record_type, state, end_reason, body, requested_by, predecessor,
+	if _, err = tx.Exec(ctx, `INSERT INTO authz_record (id, record_type, state, end_reason, body, requested_by, predecessor,
 			effective_at, valid_from, valid_until, reason, last_change)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, id, p.recType, state, end, body, e.requester, pred,
-		p.at, p.from, p.to, why, e.namespace+":"+e.key)
-	return id, err
+		p.at, p.from, p.to, why, e.namespace+":"+e.key); err != nil {
+		return "", err
+	}
+	return id, indexSources(ctx, tx, id, p.recType, body)
 }
 
 // transition moves a record to state (with its end or hold reason, and a rejection's reason), advancing its state

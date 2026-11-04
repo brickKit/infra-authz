@@ -32,7 +32,7 @@ type standing struct {
 // manages: the requester holds this unit or one above it.
 func (s standing) manages(unit string) bool {
 	for u := unit; u != ""; u = s.units[u].Parent {
-		if slices.Contains(s.held, u) {
+		if slices.ContainsFunc(s.held, func(h string) bool { return sameUnit(s.units, h, u) }) {
 			return true
 		}
 		if _, ok := s.units[u]; !ok {

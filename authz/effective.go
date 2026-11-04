@@ -231,3 +231,55 @@ func windowIntersect(a, b sdkauthz.Window) (sdkauthz.Window, bool) {
 	}
 	return out, true
 }
+
+// computable: every pair of a segment with a limit segment of its operation is in security 07's table (the closure
+// job holds a record that is not: held, uncomputable).
+func (l *limit) computable(segs []sdkauthz.Segment) bool {
+	if l == nil || l.all {
+		return true
+	}
+	for _, s := range segs {
+		for _, b := range l.segs {
+			if s.ResourceType != b.ResourceType || s.Operation != b.Operation {
+				continue
+			}
+			if len(s.Atoms) != len(b.Atoms) {
+				return false
+			}
+			for dim, x := range s.Atoms {
+				y, ok := b.Atoms[dim]
+				if !ok || !kindsMeet(x.Kind, y.Kind) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// kindsMeet: the pairs atomIntersect has a rule for.
+func kindsMeet(x, y string) bool {
+	switch {
+	case x == "all" || y == "all", x == y && x != "":
+		return true
+	}
+	return x == "self" && y == "in" || x == "in" && y == "self"
+}
+
+// covers: every segment is within one limit segment and its operation grantable (otherwise partly outside: the
+// record stays effective with the intersection, marked for review).
+func (l *limit) covers(segs []sdkauthz.Segment, grantee string) bool {
+	if l == nil {
+		return false
+	}
+	if l.all {
+		return true
+	}
+	for _, s := range segs {
+		if !slices.Contains(l.ops, s.Operation) ||
+			!slices.ContainsFunc(l.segs, func(b sdkauthz.Segment) bool { return contained(s, b, grantee) == nil }) {
+			return false
+		}
+	}
+	return true
+}

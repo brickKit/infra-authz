@@ -181,12 +181,23 @@ func (m *Module) view(ctx context.Context, tx db.Tx, component string) (raw []by
 	if err != nil {
 		return
 	}
+	roles, err := active(ctx, tx, "role_revision")
+	if err != nil {
+		return
+	}
+	activeRole := map[string]bool{}
+	for _, r := range roles {
+		activeRole[r.ID] = true
+	}
 	lims := newLimits(units)
 	segsOf := map[string][]any{}
 	for _, g := range grants {
 		var b grantBody
 		if err = json.Unmarshal(g.Body, &b); err != nil {
 			return
+		}
+		if b.RoleRevision != "" && !activeRole[b.RoleRevision] {
+			continue // its role revision is no longer effective: nothing (security 08)
 		}
 		// the effective segments (security 08): the grant's ∩ its governance unit's current limit, of keys registered,
 		// not retired and still defined by their owner

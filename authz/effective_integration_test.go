@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
@@ -14,6 +15,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// reviewOf is a record's review flag (partly outside its limits).
+func reviewOf(t *testing.T, admin *pgx.Conn, id any) bool {
+	var r bool
+	require.NoError(t, admin.QueryRow(context.Background(), "SELECT review FROM "+itSchema+".authz_record WHERE id = $1", id).Scan(&r))
+	return r
+}
 
 // regionsOf is the region values a principal's segments in a view allow (nil: not in the view, or no segment).
 func regionsOf(segs []sdkauthz.Segment) [][]string {
@@ -26,8 +34,9 @@ func regionsOf(segs []sdkauthz.Segment) [][]string {
 
 // testEffective is T4f (security 08, "有效段的计算"): a view gives a grant's segments ∩ its governance unit's current
 // limit, and a unit's limit is its scope ∩ its parent's, up to the root; a parent that narrows narrows the view at
-// once, the grant itself unchanged and still active (partly outside: it stays effective). The effect point proves a
-// new grant against the same effective limit. A permission key its owner no longer defines gives nothing.
+// once, the grant itself unchanged and still active (partly outside: it stays effective); T4g's closure job then
+// keeps the books. The effect point proves a new grant against the same effective limit. A role revision that ends,
+// or a permission key its owner no longer defines, gives nothing.
 // segmentsOf verifies demo/orders' view and returns a principal's segments in it.
 func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string, segmentsOf func(string) []sdkauthz.Segment) {
 	ctx := context.Background()
@@ -45,19 +54,97 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 		submitChange(t, w, sectest.Alice, map[string]any{"change_key": key, "direction": "tighten", "target": wide["record"],
 			"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 200)
 	}
-	// the parent narrows: the grant keeps its segments, the view gives the intersection at once
+	bobs := submitChange(t, w, sectest.Alice, holdingReq("efh", sub["record"], sectest.Bob), 200)
+	// the parent narrows: the grant keeps its segments, the view gives the intersection at once; the closure job then
+	// marks it partly outside, to be reviewed, still effective (security 08's closure)
 	narrowWide("ef4", "east", "north")
 	assert.Equal(t, [][]string{{"east"}}, regionsOf(segmentsOf(carol)), "{east, west} ∩ {east, west} ∩ {east, north}")
+	require.Eventually(t, func() bool { return reviewOf(t, admin, g["record"]) }, 10*time.Second, 100*time.Millisecond,
+		"partly outside: marked for review")
 	assert.Equal(t, "active", recordOf(t, admin, g["record"]).State, "partly outside: still effective")
 	assert.EqualValues(t, 1, recordOf(t, admin, g["record"]).Revision, "the grant itself unchanged")
-	// narrowed past it: nothing left, the record still active (the closure job ends it, T4g)
+	// the effect point proves against the same effective limit: within the sub-unit's own scope, beyond its parent's
+	beyond := submitChange(t, w, sectest.Alice, grantReq("ef6", sub["record"], carol, []sdkauthz.Segment{orderSeg(region("west"))}), 403)
+	assert.Equal(t, "CONTAINMENT_NOT_PROVEN", beyond["reason"])
+	// narrowed past it: nothing left in the view at once; then the books: the sub-unit has nothing left
+	// (source_narrowed), and what was under it lost its unit (source_ended)
 	narrowWide("ef5", "north")
 	assert.Empty(t, segmentsOf(carol), "{east, west} ∩ {north}: empty")
-	assert.Equal(t, "active", recordOf(t, admin, g["record"]).State)
-	// the effect point proves against the same effective limit: within the sub-unit's own scope, beyond its parent's
-	beyond := submitChange(t, w, sectest.Alice, grantReq("ef6", sub["record"], carol, []sdkauthz.Segment{orderSeg(region("east"))}), 403)
-	assert.Equal(t, "CONTAINMENT_NOT_PROVEN", beyond["reason"])
-	submitChange(t, w, sectest.Alice, tightenReq("ef3r", g["record"]), 200)
+	require.Eventually(t, func() bool { return recordOf(t, admin, g["record"]).State == "ended" }, 10*time.Second,
+		100*time.Millisecond, "the closure job keeps the books")
+	assert.Equal(t, recordState{State: "ended", EndReason: "source_narrowed", Revision: 1, StateRev: 2}, recordOf(t, admin, sub["record"]))
+	assert.Equal(t, recordState{State: "ended", EndReason: "source_ended", Revision: 1, StateRev: 2}, recordOf(t, admin, g["record"]))
+	require.Eventually(t, func() bool { return recordOf(t, admin, bobs["record"]).State == "ended" }, 10*time.Second, 100*time.Millisecond)
+	assert.Equal(t, "source_ended", recordOf(t, admin, bobs["record"]).EndReason, "a holding in a unit that ended")
+	assert.Equal(t, recordState{State: "active", Revision: 3, StateRev: 3}, recordOf(t, admin, wide["record"]), "within the root")
+
+	// a role revision that ends: a grant made from it gives nothing at once, and ends source_ended
+	role := submitChange(t, w, sectest.Alice, widenReq("efr", "role_revision", map[string]any{"name": "order reader",
+		"segments_template": []sdkauthz.Segment{orderSeg(region("east"))}}), 200)
+	byRole := submitChange(t, w, sectest.Alice, widenReq("efr1", "grant", map[string]any{"governance_unit": root, "grantee": carol,
+		"role_revision": role["record"]}), 200)
+	assert.Equal(t, [][]string{{"east"}}, regionsOf(segmentsOf(carol)))
+	submitChange(t, w, sectest.Alice, tightenReq("efr2", role["record"]), 200)
+	assert.Empty(t, segmentsOf(carol), "its role revision ended: nothing")
+	require.Eventually(t, func() bool { return recordOf(t, admin, byRole["record"]).State == "ended" }, 10*time.Second, 100*time.Millisecond)
+	assert.Equal(t, "source_ended", recordOf(t, admin, byRole["record"]).EndReason)
+
+	// a unit renewed wider is a new record superseding the old: what names the old one is under the new (its closure
+	// finds them still within, nothing ends), and a grant naming the old ID is proved against the new limit
+	old := submitChange(t, w, sectest.Alice, unitReq("efs", root, "renewable", []sdkauthz.Segment{orderSeg(region("east"))},
+		[]string{"demo.order.read"}), 200)
+	under := submitChange(t, w, sectest.Alice, grantReq("efs1", old["record"], carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
+	submitChange(t, w, sectest.Alice, holdingReq("efsh", old["record"], sectest.Bob), 200)
+	renewed := submitChange(t, w, sectest.Alice, widenReq("efs2", "management_unit", map[string]any{"name": "renewable", "parent": root,
+		"managed_scope": []sdkauthz.Segment{orderSeg(region("east", "west"))}, "grantable_operations": []string{"demo.order.read"},
+		"predecessor": old["record"]}), 200)
+	assert.Equal(t, "superseded", recordOf(t, admin, old["record"]).EndReason)
+	require.Eventually(t, func() bool {
+		var st string
+		_ = admin.QueryRow(ctx, "SELECT state FROM "+itSchema+".be_work_item WHERE job = $1 AND args->>'ref' = $2", JobClosure,
+			old["record"]).Scan(&st)
+		return st == "done"
+	}, 10*time.Second, 100*time.Millisecond, "the old unit's closure ran")
+	assert.Equal(t, "active", recordOf(t, admin, under["record"]).State, "still under the renewed unit")
+	assert.False(t, reviewOf(t, admin, under["record"]))
+	assert.Equal(t, [][]string{{"east"}}, regionsOf(segmentsOf(carol)), "still in the view")
+	wider := submitChange(t, w, sectest.Alice, grantReq("efs3", old["record"], carol, []sdkauthz.Segment{orderSeg(region("west"))}), 200)
+	assert.Equal(t, "applied", wider["outcome"], "the old ID is under the renewed unit's limit")
+	byHolder := submitChange(t, w, sectest.Bob, grantReq("efs6", renewed["record"], carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
+	assert.Equal(t, "applied", byHolder["outcome"], "Bob's holding of the old unit is a holding of the renewed one")
+	// the renewed unit narrows: its closure reaches what names the old ID too
+	raw, _ := json.Marshal(map[string]any{"name": "renewable", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region("east"))},
+		"grantable_operations": []string{"demo.order.read"}})
+	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "efs7", "direction": "tighten", "target": renewed["record"],
+		"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 200)
+	require.Eventually(t, func() bool { return recordOf(t, admin, wider["record"]).State == "ended" }, 10*time.Second, 100*time.Millisecond,
+		"west, under the old ID, has nothing left")
+	assert.Equal(t, "source_narrowed", recordOf(t, admin, wider["record"]).EndReason)
+	assert.Equal(t, "active", recordOf(t, admin, under["record"]).State)
+	submitChange(t, w, sectest.Alice, tightenReq("efs4", under["record"]), 200)
+	submitChange(t, w, sectest.Alice, tightenReq("efs5", byHolder["record"]), 200)
+
+	// an index that cannot say who is affected is not "nobody": the closure scans, and the source domain is marked
+	// for review
+	other := submitChange(t, w, sectest.Alice, unitReq("efx", root, "other", []sdkauthz.Segment{orderSeg(region("east", "west"))},
+		[]string{"demo.order.read"}), 200)
+	_, err := admin.Exec(ctx, "UPDATE "+itSchema+".authz_dependency_index SET complete = false WHERE kind = 'management_unit'")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), "UPDATE "+itSchema+".authz_dependency_index SET complete = true")
+	})
+	raw, _ = json.Marshal(map[string]any{"name": "other", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region("east"))},
+		"grantable_operations": []string{"demo.order.read"}})
+	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "efx1", "direction": "tighten", "target": other["record"],
+		"candidate": json.RawMessage(raw), "candidate_digest": candidateDigest("management_unit", raw)}, 200)
+	require.Eventually(t, func() bool {
+		var n int
+		require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".authz_review_domain WHERE kind = 'management_unit' AND ref = $1",
+			other["record"]).Scan(&n))
+		return n == 1
+	}, 10*time.Second, 100*time.Millisecond, "the domain marked for review")
+	_, err = admin.Exec(ctx, "UPDATE "+itSchema+".authz_dependency_index SET complete = true WHERE kind = 'management_unit'")
+	require.NoError(t, err)
 
 	// a permission key its owner's definitions no longer have gives nothing, the grant unchanged
 	conn := dial(t, w, "demo/invoices")

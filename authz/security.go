@@ -19,6 +19,8 @@ type unitBody struct {
 	Root                bool               `json:"root,omitempty"` // the install claim's unit: every declared resource and operation
 	ManagedScope        []sdkauthz.Segment `json:"managed_scope"`
 	GrantableOperations []string           `json:"grantable_operations"`
+
+	id string // the unit's current record: itself, or the active successor of a superseded one (units)
 }
 
 type holdingBody struct {

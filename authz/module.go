@@ -232,9 +232,11 @@ func (m *Module) claim(ctx context.Context, tx db.Tx) error {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO authz_record (id, record_type, state, body, requested_by) VALUES ($1, $2, 'active', $3, $4)`,
-			id, typ, b, ID)
-		return err
+		if _, err = tx.Exec(ctx, `INSERT INTO authz_record (id, record_type, state, body, requested_by) VALUES ($1, $2, 'active', $3, $4)`,
+			id, typ, b, ID); err != nil {
+			return err
+		}
+		return indexSources(ctx, tx, id, typ, b)
 	}
 	for _, w := range []struct {
 		id, typ string

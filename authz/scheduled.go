@@ -59,6 +59,7 @@ func (a firing) digest() string {
 // Jobs declares the member's background work.
 func (m *Module) Jobs(j *work.Jobs) error {
 	j.Add(work.Job{Name: JobDue, Kind: work.Queue, Effect: work.Local, MaxWait: MaxProcessingWait, Handle: m.due})
+	j.Add(work.Job{Name: JobClosure, Kind: work.Queue, Effect: work.Local, Handle: m.closure})
 	return nil
 }
 

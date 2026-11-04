@@ -108,9 +108,47 @@ func (m *Module) units(ctx context.Context, tx db.Tx) (map[string]unitBody, erro
 		if err := json.Unmarshal(r.Body, &u); err != nil {
 			return nil, err
 		}
+		u.id = r.ID
 		out[r.ID] = u
 	}
+	// a unit renewed or widened is a new record superseding the old (security 08): what names the old one (a child's
+	// parent, a holding, a grant's governance unit) is under its active successor
+	rows, err := tx.Query(ctx, `SELECT predecessor::text, id::text FROM authz_record WHERE record_type = 'management_unit'
+		AND predecessor IS NOT NULL AND (state = 'active' OR end_reason = 'superseded')`)
+	if err != nil {
+		return nil, err
+	}
+	succ := map[string]string{}
+	for rows.Next() {
+		var pred, id string
+		if err := rows.Scan(&pred, &id); err != nil {
+			return nil, err
+		}
+		succ[pred] = id
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for pred := range succ {
+		cur := pred
+		for range len(succ) {
+			if cur = succ[cur]; cur == "" {
+				break
+			}
+			if u, ok := out[cur]; ok {
+				out[pred] = u
+				break
+			}
+		}
+	}
 	return out, nil
+}
+
+// sameUnit: two unit IDs name the same current unit.
+func sameUnit(units map[string]unitBody, a, b string) bool {
+	ua, ok1 := units[a]
+	ub, ok2 := units[b]
+	return a == b || ok1 && ok2 && ua.id == ub.id
 }
 
 // holdingsOf returns the units a principal holds and whether one holding makes it an authorization admin.
