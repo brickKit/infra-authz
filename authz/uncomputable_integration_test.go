@@ -77,7 +77,7 @@ func testUncomputable(t *testing.T, w *sectest.World, admin *pgx.Conn, root stri
 	cand, _ := json.Marshal(map[string]any{"governance_unit": u2["record"], "grantee": carol, "segments": []sdkauthz.Segment{orderSeg(region("east"))}})
 	narrowed := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "uc8", "direction": "tighten", "target": g2["record"],
 		"expected_state_revision": map[string]any{"domain": "authz.record.state", "value": strconv.FormatInt(before.StateRev, 10)},
-		"candidate": json.RawMessage(cand), "candidate_digest": candidateDigest("grant", cand)}, 200)
+		"candidate":               json.RawMessage(cand), "candidate_digest": candidateDigest("grant", cand)}, 200)
 	assert.Equal(t, "applied", narrowed["outcome"])
 	require.Eventually(t, func() bool { st, _ := state(g2["record"]); return st == "active" }, 10*time.Second, 100*time.Millisecond,
 		"its unit's closure found it computable with the new content and restored it")
