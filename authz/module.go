@@ -65,7 +65,9 @@ func New(rt *runtime.Runtime) (*Module, error) {
 		return nil, errs.New(errs.ReasonRequestInvalid, "IAM_GRPC_URL cannot be dialled: the identity member's system surface")
 	}
 	// an account whose status changed: the closure job keeps the books of what it is a source of
-	changed := func(ctx context.Context, tx db.Tx, principal string) error { return m.closeAfter(ctx, tx, "account", principal) }
+	changed := func(ctx context.Context, tx db.Tx, principal string) error {
+		return m.closeAfter(ctx, tx, "account", principal)
+	}
 	m.accounts = &projection.Watermarked{Projection: projection.Projection{Name: Accounts, Changed: changed}, DB: rt.DB, Source: iam,
 		Stream: AccountStream, Deployment: m.deployment, Freshness: m.srcHigh, Pull: projection.PullClient{Conn: conn},
 		Snapshot: projection.RecordClient{Conn: conn, Stream: AccountStream.Name}, Log: rt.Logger}
