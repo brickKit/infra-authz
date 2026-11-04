@@ -195,6 +195,7 @@ func testScheduled(t *testing.T, w *sectest.World, admin *pgx.Conn, root, east s
 	}
 	require.NotEmpty(t, bobHolds)
 	pending := submitChange(t, w, sectest.Bob, scheduledGrant("d10", lim["record"], carol, seg, time.Hour), 202)
+	effective := submitChange(t, w, sectest.Bob, grantReq("d10g", lim["record"], carol, seg), 200)
 	alices := submitChange(t, w, sectest.Alice, scheduledGrant("d11", root, carol, seg, time.Hour), 202)
 	submitChange(t, w, sectest.Alice, tightenReq("d10r", bobHolds), 200)
 	terminate := func(key, how string, target any) map[string]any {
@@ -207,6 +208,16 @@ func testScheduled(t *testing.T, w *sectest.World, admin *pgx.Conn, root, east s
 	submitChange(t, w, sectest.Bob, terminate("d10w", "withdraw", pending["record"]), 200)
 	assert.Equal(t, recordState{State: "ended", EndReason: "withdrawn", Revision: 1, StateRev: 2}, recordOf(t, admin, pending["record"]))
 	submitChange(t, w, sectest.Alice, terminate("d11a", "cancel", alices["record"]), 200)
+	// the grantor stepping down does not end what he granted (D36; model 09's departure_ends_grants): no closure
+	// follows a holding, the grant stays effective
+	require.Eventually(t, func() bool {
+		var busy int
+		_ = admin.QueryRow(context.Background(), "SELECT count(*) FROM "+itSchema+".be_work_item WHERE job = $1 AND state <> 'done'",
+			JobClosure).Scan(&busy)
+		return busy == 0
+	}, 10*time.Second, 100*time.Millisecond, "the closures have run")
+	assert.Equal(t, "active", recordOf(t, admin, effective["record"]).State)
+	submitChange(t, w, sectest.Alice, tightenReq("d10gr", effective["record"]), 200)
 
 	// a validity that ends before it would take effect never gives access: refused at once
 	never := widenReq("d4", "grant", map[string]any{"governance_unit": root, "grantee": carol, "segments": seg,
