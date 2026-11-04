@@ -82,6 +82,8 @@ func (e entry) operation() string {
 	switch {
 	case e.selfOnly:
 		return OpRelinquish
+	case isDisposition(e.req.Candidate):
+		return OpDispose
 	case e.req.Direction == Tighten:
 		return OpTighten
 	}
@@ -102,10 +104,14 @@ type plan struct {
 	from, to  *time.Time
 	at        *time.Time // effective_from
 	successor string     // the predecessor that a new record supersedes
+	// keepPredecessor: the predecessor is held by a disposition; its release ends it superseded (CP31)
+	keepPredecessor bool
 	// basis: the requester judged by the last applied facts (security 03); the result and the audit say so
 	basis map[string]any
 	// coolingOff: a protected widening the owner alone confirmed, waiting until then (cooling.go)
 	coolingOff *time.Time
+	// disp: a new security disposition (disposition.go)
+	disp *plannedDisposition
 }
 
 // change runs one user change at the effect point.

@@ -117,6 +117,8 @@ func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/changes/:key", Operation: OpRelinquish, Handle: m.changeByKey})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/relinquishments", Operation: OpRelinquish, Handle: m.relinquishHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/records", Operation: OpRead, Handle: m.recordsHTTP})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/dispositions", Operation: OpDispose, Handle: m.disposeHTTP})
+	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/dispositions", Operation: OpDispRead, Handle: m.dispositionsHTTP})
 	return nil
 }
 
@@ -360,6 +362,10 @@ func (m *Module) claim(ctx context.Context, tx db.Tx) error {
 		return sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{Holder: {Kind: "all"}},
 			ReadFields: []string{"body", "id", "record_type", "state"}, Valid: sdkauthz.Window{From: from}}
 	}
+	disp := func(op string) sdkauthz.Segment { // the dispositions (A128): no dimensions
+		return sdkauthz.Segment{ResourceType: Dispositions, Operation: op, Atoms: map[string]sdkauthz.Atom{},
+			ReadFields: []string{"body", "id"}, Valid: sdkauthz.Window{From: from}}
+	}
 	write := func(id, typ string, body any) error {
 		b, err := json.Marshal(body)
 		if err != nil {
@@ -377,7 +383,8 @@ func (m *Module) claim(ctx context.Context, tx db.Tx) error {
 	}{
 		{root, "management_unit", unitBody{Name: "deployment", Root: true}},
 		{holding, "management_holding", holdingBody{Unit: root, Holder: m.bootstrap, SystemRole: "authorization_admin"}},
-		{grant, "grant", grantBody{Grantee: m.bootstrap, Segments: []sdkauthz.Segment{seg(OpRead), seg(OpChange), seg(OpTighten)},
+		{grant, "grant", grantBody{Grantee: m.bootstrap, Segments: []sdkauthz.Segment{seg(OpRead), seg(OpChange), seg(OpTighten),
+			disp(OpDispRead), disp(OpDispose), disp(OpRelease)},
 			GovernanceUnit: root, IssuedBy: ID}},
 	} {
 		if err := write(w.id, w.typ, w.body); err != nil {

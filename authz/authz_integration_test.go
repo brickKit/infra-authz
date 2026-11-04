@@ -54,6 +54,9 @@ const registryTSV = "kind\tkey\towner_component\n" +
 	"resource_type\tinfra.authz.security_record\tinfra/authz\nresource_type\tinfra.authz.system\tinfra/authz\n" +
 	"permission\tinfra.authz.security_record.read\tinfra/authz\npermission\tinfra.authz.security_record.change\tinfra/authz\n" +
 	"permission\tinfra.authz.security_record.tighten\tinfra/authz\n" +
+	"resource_type\tinfra.authz.security_disposition\tinfra/authz\n" +
+	"permission\tinfra.authz.security_disposition.read\tinfra/authz\npermission\tinfra.authz.security_disposition.dispose\tinfra/authz\n" +
+	"permission\tinfra.authz.security_disposition.release\tinfra/authz\n" +
 	"permission\tinfra.authz.security_record.relinquish\tinfra/authz\n" +
 	"permission\tinfra.authz.system.read\tinfra/authz\npermission\tinfra.authz.system.verify\tinfra/authz\n" +
 	"permission\tinfra.authz.system.submit\tinfra/authz\n" +
@@ -92,6 +95,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	e.identity()
 	e.staleTightening()
 	e.coolingOff()
+	e.dispositions()
 	e.audited()
 }
 

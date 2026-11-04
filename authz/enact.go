@@ -106,6 +106,9 @@ func (m *Module) save(ctx context.Context, tx db.Tx, e entry, p plan, state stri
 // apply makes the change effective: a new record (superseding its predecessor), a saved one taking effect, a
 // record ended, or a narrowing; the security revision advances.
 func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change string) (changeResult, error) {
+	if p.disp != nil {
+		return m.dispose(ctx, tx, e, p, change)
+	}
 	var res changeResult
 	var id string
 	var stateRev int64
@@ -156,7 +159,7 @@ func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change st
 			return res, err
 		}
 	}
-	if p.successor != "" && (p.activate || p.target == nil) {
+	if p.successor != "" && !p.keepPredecessor && (p.activate || p.target == nil) {
 		if _, err := m.transition(ctx, tx, p.successor, "ended", "superseded", "", change, ""); err != nil {
 			return res, err
 		}

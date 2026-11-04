@@ -20,7 +20,7 @@ import (
 // Identity of the component.
 const (
 	ID      = "infra/authz"
-	Version = "3.0.19"
+	Version = "3.0.20"
 )
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.
@@ -34,6 +34,12 @@ const (
 	// OpRelinquish ends one's own grant or holding (D82): nobody grants it, the member's own view gives every holder a
 	// fixed segment of it
 	OpRelinquish = "infra.authz.security_record.relinquish"
+	// Dispositions (security 08's security dispositions, A128): who may dispose and release within the management
+	// limit; dispose only reduces access, release restores it
+	Dispositions = "infra.authz.security_disposition"
+	OpDispRead   = "infra.authz.security_disposition.read"
+	OpDispose    = "infra.authz.security_disposition.dispose"
+	OpRelease    = "infra.authz.security_disposition.release"
 	// Holder is the records' principal dimension (D82)
 	Holder         = "holder"
 	System         = "infra.authz.system"
@@ -113,6 +119,8 @@ func Definitions() *sdkauthz.Definitions {
 			{Type: Records, ViewOperation: OpRead, Dimensions: holder, Fields: map[string]sdkauthz.Field{
 				"id": {Class: sdkauthz.Ordinary}, "record_type": {Class: sdkauthz.Ordinary}, "state": {Class: sdkauthz.Ordinary},
 				"body": {Class: sdkauthz.Ordinary}}},
+			{Type: Dispositions, ViewOperation: OpDispRead, Dimensions: none, Fields: map[string]sdkauthz.Field{
+				"id": {Class: sdkauthz.Ordinary}, "body": {Class: sdkauthz.Ordinary}}},
 			{Type: System, ViewOperation: SystemRead, Dimensions: none, Fields: map[string]sdkauthz.Field{}}},
 		Operations: []sdkauthz.Operation{
 			{Key: OpRead, ResourceType: Records, Purpose: "read", RiskClass: "low"},
@@ -122,6 +130,11 @@ func Definitions() *sdkauthz.Definitions {
 				Audit: true, TighteningOnly: true},
 			{Key: OpRelinquish, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
 				Audit: true, TighteningOnly: true},
+			{Key: OpDispRead, ResourceType: Dispositions, Purpose: "read", RiskClass: "low"},
+			{Key: OpDispose, ResourceType: Dispositions, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
+				Audit: true, TighteningOnly: true},
+			{Key: OpRelease, ResourceType: Dispositions, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
+				Audit: true},
 			{Key: SystemRead, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpVerify, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpSubmit, ResourceType: System, Purpose: "manage", RiskClass: "low", SideEffects: []string{"security_change"}},

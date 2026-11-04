@@ -55,6 +55,12 @@ func main() {
 		s.ReadFields = []string{"id", "record_type", "state", "body"}
 		segs = append(segs, s)
 	}
+	for _, op := range []string{"infra.authz.security_disposition.read", "infra.authz.security_disposition.dispose",
+		"infra.authz.security_disposition.release"} { // dispositions within the unit's limit (A128)
+		s := seed.Segment("infra.authz.security_disposition", op)
+		s.ReadFields = []string{"id", "body"}
+		segs = append(segs, s)
+	}
 	_, err = a.Grant("unit-admin", "", accounts["test.unit.admin.cn"].Principal, segs)
 	check(err)
 	// the unit's admin can use the effect point once the grant reaches the member's own view

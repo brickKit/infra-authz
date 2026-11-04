@@ -236,6 +236,10 @@ func (m *Module) view(ctx context.Context, tx db.Tx, component string) (raw []by
 		activeRole[r.ID] = true
 	}
 	lims := newLimits(units)
+	disposed, err := activeDispositions(ctx, tx)
+	if err != nil {
+		return
+	}
 	segsOf := map[string][]any{}
 	for _, g := range grants {
 		var b grantBody
@@ -248,7 +252,8 @@ func (m *Module) view(ctx context.Context, tx db.Tx, component string) (raw []by
 		// the effective segments (security 08): the grant's ∩ its governance unit's current limit, of keys registered,
 		// not retired and still defined by their owner
 		for _, s := range lims.of(b.GovernanceUnit).cut(b.Segments, b.Grantee) {
-			if !defs.usable(s, reg) {
+			// a segment that meets a scope an active disposition suspends is left out whole (security 08)
+			if !defs.usable(s, reg) || suspended(disposed[b.Grantee], s, b.Grantee) {
 				continue
 			}
 			if err = place(segsOf, b.Grantee, s, g.ID, component, defs); err != nil {
@@ -268,7 +273,7 @@ func (m *Module) view(ctx context.Context, tx db.Tx, component string) (raw []by
 					Valid: sdkauthz.Window{From: relinquishFrom}},
 				{ResourceType: Records, Operation: OpRelinquish, Atoms: self, Valid: sdkauthz.Window{From: relinquishFrom}},
 			} {
-				if !defs.usable(s, reg) {
+				if !defs.usable(s, reg) || suspended(disposed[p], s, p) {
 					continue
 				}
 				if err = place(segsOf, p, s, src, component, defs); err != nil {

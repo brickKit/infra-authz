@@ -78,6 +78,8 @@ func (m *Module) factsOf(ctx context.Context, tx db.Tx, e entry) (facts, plan, *
 		structural, pre, err = m.submitted(ctx, tx, e, s, &f, &p)
 	case e.req.Target != "":
 		structural, pre, err = m.onTarget(ctx, tx, e, s, &f, &p)
+	case e.req.Direction == Tighten && isDisposition(e.req.Candidate):
+		structural, pre, err = m.disposing(ctx, tx, e, s, &f, &p)
 	default:
 		pre = invalid("a change is a widening with a candidate, or names its target")
 	}
@@ -307,8 +309,11 @@ func (m *Module) supersedes(ctx context.Context, tx db.Tx, pred string, stored b
 	if err != nil {
 		return err
 	}
+	// a predecessor a disposition holds may be renewed (CP31): the new record takes effect, evaluation keeps
+	// suspending what meets the disposition, and the release ends the old one superseded (security 08)
+	disposed := t != nil && t.State == "held" && t.HoldReason == "security_hold"
 	switch {
-	case t == nil || t.Type != p.recType || t.State != "active":
+	case t == nil || t.Type != p.recType || t.State != "active" && !disposed:
 		if stored {
 			f.RevisionsChanged = true
 		} else {
@@ -320,7 +325,7 @@ func (m *Module) supersedes(ctx context.Context, tx db.Tx, pred string, stored b
 		nb := p.body.(grantBody)
 		f.Contained = f.Contained && coversAll(nb.Segments, old.Segments) && old.Grantee == nb.Grantee
 	}
-	p.successor = pred
+	p.successor, p.keepPredecessor = pred, disposed
 	return nil
 }
 
@@ -387,6 +392,10 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 		}
 		if e.selfOnly { // a relinquishment: one's own record only, whatever else one manages
 			structural, p.endReason = relinquish, "relinquished"
+		}
+		// a record a disposition holds is not the disposed person's to give up (CP110, CP114): row 8
+		if relinquish && t.HoldReason == "security_hold" {
+			structural = false
 		}
 		if len(req.Candidate) > 0 { // a narrowing: a new content revision of the same record
 			if req.CandidateDigest != candidateDigest(t.Type, req.Candidate) {
