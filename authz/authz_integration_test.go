@@ -99,6 +99,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	e.releases()
 	e.identitySide()
 	e.lastAdmin()
+	e.pending()
 	e.audited()
 }
 

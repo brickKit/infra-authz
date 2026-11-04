@@ -32,12 +32,12 @@ func (e *e2e) lastAdmin() {
 		" WHERE record_type = 'management_holding' AND state <> 'active'")
 	require.NoError(t, err)
 
-	// Alice holds a second admin holding in a unit of her own; Kim, who manages the root, may tighten records
+	// Alice holds a second admin holding in a unit of her own; Kim, who manages the root, may change and tighten records
 	unit := protect(t, w, sectest.Alice, unitReq("la1", root, "last", scope, ops))
 	protect(t, w, sectest.Alice, widenReq("la2", "management_holding",
 		map[string]any{"unit": unit["record"], "holder": sectest.Alice, "system_role": "authorization_admin"}))
 	segs := []sdkauthz.Segment{}
-	for _, op := range []string{OpRead, OpTighten} {
+	for _, op := range []string{OpRead, OpChange, OpTighten} {
 		segs = append(segs, sdkauthz.Segment{ResourceType: Records, Operation: op, Atoms: map[string]sdkauthz.Atom{Holder: {Kind: "all"}},
 			ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}})
 	}

@@ -72,7 +72,10 @@ func New(rt *runtime.Runtime) (*Module, error) {
 		if err := m.identitySignal(ctx, tx, principal); err != nil { // a freeze or a mark: a disposition (T6c)
 			return err
 		}
-		return m.closeAfter(ctx, tx, "account", principal)
+		if err := m.closeAfter(ctx, tx, "account", principal); err != nil {
+			return err
+		}
+		return m.judgeAdmins(ctx, tx) // the account of an admin may no longer be active (T6e)
 	}
 	m.accounts = &projection.Watermarked{Projection: projection.Projection{Name: Accounts, Changed: changed}, DB: rt.DB, Source: iam,
 		Stream: AccountStream, Deployment: m.deployment, Freshness: m.srcHigh, Pull: projection.PullClient{Conn: conn},
@@ -123,6 +126,7 @@ func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/dispositions", Operation: OpDispose, Handle: m.disposeHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/dispositions", Operation: OpDispRead, Handle: m.dispositionsHTTP})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/dispositions/:id/release", Operation: OpRelease, Handle: m.releaseHTTP})
+	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/admin-state", Operation: OpDispRead, Handle: m.adminStateHTTP})
 	return nil
 }
 

@@ -291,6 +291,11 @@ func (m *Module) keepBooks(ctx context.Context, tx db.Tx, w sources, id string, 
 		if _, err := m.transition(ctx, tx, id, v.state, v.endReason, v.holdReason, "", ""); err != nil {
 			return err
 		}
+		if t.Type == "management_holding" { // an admin may have become unavailable (T6e)
+			if err := m.judgeAdmins(ctx, tx); err != nil {
+				return err
+			}
+		}
 		if _, err := m.rt.Audit.Write(ctx, tx, audit.Record{Category: audit.SecurityChange, Operation: OpChange,
 			Outcome: audit.Succeeded, Actor: ID, Target: map[string]any{"type": t.Type, "id": id},
 			Changes: map[string]any{"closure": v.state, "reason": v.endReason + v.holdReason}}); err != nil {

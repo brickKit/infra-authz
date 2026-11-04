@@ -200,6 +200,11 @@ func (m *Module) effect(ctx context.Context, tx db.Tx, e entry) (changeResult, v
 	if err != nil {
 		return res, v, err
 	}
+	if res.Outcome == "applied" && f.AffectsAdmins { // an admin may have become unavailable (T6e)
+		if err := m.judgeAdmins(ctx, tx); err != nil {
+			return res, v, err
+		}
+	}
 	res.ChangeKey = e.key
 	if binds(v, e.trigger) {
 		out, _ := json.Marshal(res)

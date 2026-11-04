@@ -60,6 +60,11 @@ func (m *Module) factsOf(ctx context.Context, tx db.Tx, e entry) (facts, plan, *
 	f := facts{Trigger: e.trigger, FromState: true, FromRevision: true, Contained: true, ConfirmersProvable: true,
 		AdminsAfter: proven}
 	var p plan
+	st, err := adminState(ctx, tx)
+	if err != nil {
+		return f, p, nil, err
+	}
+	f.RecoveryPending = st != stateOperational // rows 13-14 (T6e)
 	units, err := m.units(ctx, tx)
 	if err != nil {
 		return f, p, nil, err
