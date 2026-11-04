@@ -4,6 +4,7 @@ package authz
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"testing"
 	"time"
@@ -165,6 +166,47 @@ func testScheduled(t *testing.T, w *sectest.World, admin *pgx.Conn, root, east s
 	submitChange(t, w, sectest.Alice, tightenReq("d6r", renewsKept["record"]), 200)
 	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "d8c", "direction": "tighten", "termination": "cancel",
 		"target": moved["record"], "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "3"}}, 200)
+
+	// the unit's limit narrows before they are due (CP82): its revision alone does not reject; still contained, it
+	// takes effect; no longer contained, row 18 rejects for good and the record ends rejected
+	ops := []string{"demo.order.read"}
+	lim := submitChange(t, w, sectest.Alice, unitReq("d9", root, "lim82", []sdkauthz.Segment{orderSeg(region("east", "west"))}, ops), 200)
+	west := submitChange(t, w, sectest.Alice, scheduledGrant("d9w", lim["record"], carol, []sdkauthz.Segment{orderSeg(region("west"))}, 2*time.Second), 202)
+	stays := submitChange(t, w, sectest.Alice, scheduledGrant("d9e", lim["record"], carol, seg, 2*time.Second), 202)
+	limRaw, _ := json.Marshal(map[string]any{"name": "lim82", "parent": root, "managed_scope": seg, "grantable_operations": ops})
+	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "d9n", "direction": "tighten", "target": lim["record"],
+		"candidate": json.RawMessage(limRaw), "candidate_digest": candidateDigest("management_unit", limRaw)}, 200)
+	require.Eventually(t, func() bool {
+		return recordOf(t, admin, west["record"]).State != "scheduled" && recordOf(t, admin, stays["record"]).State != "scheduled"
+	}, 10*time.Second, 100*time.Millisecond, "both due")
+	assert.Equal(t, recordState{State: "ended", EndReason: "rejected", Revision: 1, StateRev: 2, Reason: "CONTAINMENT_NOT_PROVEN"},
+		recordOf(t, admin, west["record"]))
+	assert.Equal(t, "active", recordOf(t, admin, stays["record"]).State, "still contained: the limit's revision alone does not reject")
+	submitChange(t, w, sectest.Alice, tightenReq("d9r", stays["record"]), 200)
+
+	// the applicant withdraws a pending request after losing the management it was made with (row 7, CP91); a
+	// manager without the domain cannot cancel another's (row 8, CP98)
+	submitChange(t, w, sectest.Alice, holdingReq("d10h", lim["record"], sectest.Bob), 200)
+	var bobHolds string
+	for _, h := range listRecords(t, w, sectest.Alice, "management_holding") {
+		if b := h["body"].(map[string]any); b["holder"] == sectest.Bob && b["unit"] == lim["record"] {
+			bobHolds = h["id"].(string)
+		}
+	}
+	require.NotEmpty(t, bobHolds)
+	pending := submitChange(t, w, sectest.Bob, scheduledGrant("d10", lim["record"], carol, seg, time.Hour), 202)
+	alices := submitChange(t, w, sectest.Alice, scheduledGrant("d11", root, carol, seg, time.Hour), 202)
+	submitChange(t, w, sectest.Alice, tightenReq("d10r", bobHolds), 200)
+	terminate := func(key, how string, target any) map[string]any {
+		return map[string]any{"change_key": key, "direction": "tighten", "termination": how, "target": target,
+			"expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}
+	}
+	denied := submitChange(t, w, sectest.Bob, terminate("d11c", "cancel", alices["record"]), 403)
+	assert.Equal(t, "PERMISSION_DENIED", denied["reason"])
+	assert.Equal(t, "scheduled", recordOf(t, admin, alices["record"]).State, "a rejected tightening changes nothing")
+	submitChange(t, w, sectest.Bob, terminate("d10w", "withdraw", pending["record"]), 200)
+	assert.Equal(t, recordState{State: "ended", EndReason: "withdrawn", Revision: 1, StateRev: 2}, recordOf(t, admin, pending["record"]))
+	submitChange(t, w, sectest.Alice, terminate("d11a", "cancel", alices["record"]), 200)
 
 	// a validity that ends before it would take effect never gives access: refused at once
 	never := widenReq("d4", "grant", map[string]any{"governance_unit": root, "grantee": carol, "segments": seg,

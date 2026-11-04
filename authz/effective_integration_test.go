@@ -161,8 +161,10 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 			JobClosure, since).Scan(&n))
 		return
 	}
-	assert.Never(t, func() bool { return closures() > 1 }, time.Second, 100*time.Millisecond,
-		"the scan covers every unit: it does not go on to each one's closure, which would scan again")
+	for range 10 { // a second, on this goroutine (the admin connection is not safe for testify's polling goroutine)
+		require.LessOrEqual(t, closures(), 1, "the scan covers every unit: it does not go on to each one's closure, which would scan again")
+		time.Sleep(100 * time.Millisecond)
+	}
 	_, err = admin.Exec(ctx, "UPDATE "+itSchema+".authz_dependency_index SET complete = true WHERE kind = 'management_unit'")
 	require.NoError(t, err)
 

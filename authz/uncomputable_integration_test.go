@@ -64,6 +64,17 @@ func testUncomputable(t *testing.T, w *sectest.World, admin *pgx.Conn, root stri
 	assert.True(t, reviewOf(t, admin, g["record"]), "partly outside: to be reviewed")
 	assert.Equal(t, [][]string{{"east"}}, regionsOf(segmentsOf(carol)))
 	assert.Equal(t, "applied", derivedBinding(t, admin, g["record"], int(heldAt), triggerRestore))
+	// held and restored a second time: a new state revision, a new derived key, not answered by the first (CP81)
+	setRegion(g["record"], tree)
+	narrowUnit("uc4a", u1["record"], "uc-one", "east")
+	require.Eventually(t, func() bool { st, _ := state(g["record"]); return st == "held" }, 10*time.Second, 100*time.Millisecond)
+	setRegion(g["record"], eastWest)
+	heldAgain := recordOf(t, admin, g["record"]).StateRev
+	require.Greater(t, heldAgain, heldAt)
+	narrowUnit("uc4b", u1["record"], "uc-one", "east")
+	require.Eventually(t, func() bool { st, _ := state(g["record"]); return st == "active" }, 10*time.Second, 100*time.Millisecond,
+		"restored again")
+	assert.Equal(t, "applied", derivedBinding(t, admin, g["record"], int(heldAgain), triggerRestore))
 
 	// held, then narrowed by a manager: still held, a new content revision (CP103); the narrowing moved its state
 	// revision, and its unit's closure registers the restore again with the new content (CP115)

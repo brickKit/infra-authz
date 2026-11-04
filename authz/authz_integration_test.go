@@ -434,6 +434,18 @@ func TestMemberEndToEnd(t *testing.T) {
 		return d.State == "retry_wait" && d.Attempts == 0 && strings.Contains(d.LastError, "ADMIN_AVAILABILITY_UNPROVABLE")
 	}, 5*time.Second, 50*time.Millisecond, "due while the source is quiet: processing, a wait that spends no attempt")
 	assert.Equal(t, "scheduled", recordOf(t, admin, waiting["record"]).State, "no access while it waits")
+	// a user's widening meanwhile (CP37): the requester cannot be proven, so it is retried later, nothing applied,
+	// the key not bound. Which answer depends on time: the effect point's processing (row 9, 202) while the member's
+	// own view still admits high-risk operations, or admission's AUTHORIZATION_VIEW_EXPIRED (503) once it does not
+	// (security 03: high-risk validity runs from the last full renewal)
+	cp37 := grantReq("cp37", root, sectest.Bob, []sdkauthz.Segment{orderSeg(region("west"))})
+	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/changes", cp37)
+	assert.True(t, code == 202 && out["outcome"] == "processing" && out["reason"] == "ADMIN_AVAILABILITY_UNPROVABLE" ||
+		code == 503 && out["reason"] == "AUTHORIZATION_VIEW_EXPIRED", "%d %v", code, out)
+	var bound int
+	require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".authz_change WHERE requested_by = $1 AND change_key = 'cp37'",
+		sectest.Alice).Scan(&bound))
+	assert.Zero(t, bound, "nothing binds the key: submit again with the same key")
 	assert.Empty(t, derivedBinding(t, admin, waiting["record"], 1, triggerScheduled), "processing binds nothing")
 	_, stopIAM = startIAM(t, w, pgPassword, busURL, false)
 	require.Eventually(t, func() bool { st, ro := status(); return st != "closed" && !ro }, 15*time.Second, 200*time.Millisecond,
@@ -441,6 +453,10 @@ func TestMemberEndToEnd(t *testing.T) {
 	require.Eventually(t, func() bool { return recordOf(t, admin, waiting["record"]).State == "active" }, 10*time.Second,
 		100*time.Millisecond, "the source answers again: the waiting job takes effect")
 	assert.Equal(t, "applied", derivedBinding(t, admin, waiting["record"], 1, triggerScheduled))
+	require.Eventually(t, func() bool { // the member's own view renews fully at its next verification
+		code, out := call(t, w, sectest.Alice, "POST", "/api/authz/changes", cp37)
+		return code == 200 && out["outcome"] == "applied"
+	}, 10*time.Second, 200*time.Millisecond, "the same key, once the source answers")
 	stopIAM()
 
 	// every applied change was audited in its transaction
