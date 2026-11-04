@@ -3,7 +3,7 @@ module github.com/brickKit/infra-authz/v3
 go 1.27.0
 
 require (
-	github.com/brickKit/be-sdk-go/v3 v3.0.0-alpha.67
+	github.com/brickKit/be-sdk-go/v3 v3.0.0-alpha.68
 	github.com/brickKit/contract-infra-authz/v3 v3.0.0-alpha.2
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/stretchr/testify v1.12.1
