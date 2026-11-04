@@ -78,6 +78,36 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 	assert.Equal(t, "source_ended", recordOf(t, admin, bobs["record"]).EndReason, "a holding in a unit that ended")
 	assert.Equal(t, recordState{State: "active", Revision: 3, StateRev: 3}, recordOf(t, admin, wide["record"]), "within the root")
 
+	// a permission key its owner's definitions no longer have gives nothing, the grant unchanged
+	conn := dial(t, w, "demo/invoices")
+	src := sdkauthz.GRPCSource{Conn: conn}
+	exportSeg := sdkauthz.Segment{ResourceType: "demo.invoice", Operation: "demo.invoice.export", Atoms: map[string]sdkauthz.Atom{},
+		ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}
+	ex := submitChange(t, w, sectest.Alice, grantReq("ef7", root, carol, []sdkauthz.Segment{exportSeg}), 200)
+	invoiceOps := func() []string {
+		ans, err := src.Verify(ctx, sdkauthz.VerifyRequest{Component: "demo/invoices", Nonce: "n1"})
+		require.NoError(t, err)
+		var out []string
+		for _, s := range ans.Shards[0].View.Subjects[carol].Segments {
+			out = append(out, s.Operation)
+		}
+		return out
+	}
+	assert.Equal(t, []string{"demo.invoice.export"}, invoiceOps())
+	without := *invoices
+	without.Operations = invoices.Operations[:1]
+	require.Equal(t, "demo.invoice.read", without.Operations[0].Key)
+	require.NoError(t, without.Validate())
+	require.NoError(t, without.Submit(ctx, authzv3.NewDefinitionServiceClient(conn), w.Deployment, "3.0.1"))
+	assert.Empty(t, invoiceOps(), "the owner no longer defines the key: nothing")
+	assert.Equal(t, "active", recordOf(t, admin, ex["record"]).State)
+	submitChange(t, w, sectest.Alice, tightenReq("ef7r", ex["record"]), 200)
+}
+
+// testSources is the closure's other sources (security 08): a role revision that ends, a unit renewed (a new record
+// superseding the old), a record's own validity, and an index that cannot say who is affected.
+func testSources(t *testing.T, w *sectest.World, admin *pgx.Conn, root string, segmentsOf func(string) []sdkauthz.Segment) {
+	ctx := context.Background()
 	// a role revision that ends: a grant made from it gives nothing at once, and ends source_ended
 	role := submitChange(t, w, sectest.Alice, widenReq("efr", "role_revision", map[string]any{"name": "order reader",
 		"segments_template": []sdkauthz.Segment{orderSeg(region("east"))}}), 200)
@@ -167,29 +197,4 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 	}
 	_, err = admin.Exec(ctx, "UPDATE "+itSchema+".authz_dependency_index SET complete = true WHERE kind = 'management_unit'")
 	require.NoError(t, err)
-
-	// a permission key its owner's definitions no longer have gives nothing, the grant unchanged
-	conn := dial(t, w, "demo/invoices")
-	src := sdkauthz.GRPCSource{Conn: conn}
-	exportSeg := sdkauthz.Segment{ResourceType: "demo.invoice", Operation: "demo.invoice.export", Atoms: map[string]sdkauthz.Atom{},
-		ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}
-	ex := submitChange(t, w, sectest.Alice, grantReq("ef7", root, carol, []sdkauthz.Segment{exportSeg}), 200)
-	invoiceOps := func() []string {
-		ans, err := src.Verify(ctx, sdkauthz.VerifyRequest{Component: "demo/invoices", Nonce: "n1"})
-		require.NoError(t, err)
-		var out []string
-		for _, s := range ans.Shards[0].View.Subjects[carol].Segments {
-			out = append(out, s.Operation)
-		}
-		return out
-	}
-	assert.Equal(t, []string{"demo.invoice.export"}, invoiceOps())
-	without := *invoices
-	without.Operations = invoices.Operations[:1]
-	require.Equal(t, "demo.invoice.read", without.Operations[0].Key)
-	require.NoError(t, without.Validate())
-	require.NoError(t, without.Submit(ctx, authzv3.NewDefinitionServiceClient(conn), w.Deployment, "3.0.1"))
-	assert.Empty(t, invoiceOps(), "the owner no longer defines the key: nothing")
-	assert.Equal(t, "active", recordOf(t, admin, ex["record"]).State)
-	submitChange(t, w, sectest.Alice, tightenReq("ef7r", ex["record"]), 200)
 }

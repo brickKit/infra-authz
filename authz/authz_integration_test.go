@@ -81,6 +81,59 @@ func orderSeg(atoms map[string]sdkauthz.Atom) sdkauthz.Segment {
 }
 
 func TestMemberEndToEnd(t *testing.T) {
+	e := startE2E(t)
+	e.definitionsAndViews()
+	e.effectPoint()
+	e.lifecycle()
+	testScheduled(t, e.w, e.admin, e.root, e.east, e.inView)
+	testNeutral(t, e.w, e.admin, e.root, e.east)
+	testEffective(t, e.w, e.admin, e.root, e.segmentsOf)
+	testSources(t, e.w, e.admin, e.root, e.segmentsOf)
+	testUncomputable(t, e.w, e.admin, e.root, e.segmentsOf)
+	testRelinquish(t, e.w, e.admin, e.root)
+	e.identity()
+	e.audited()
+}
+
+// e2e is one end-to-end run: the test deployment, the database, the stand-in identity member, the member, and
+// demo/orders' view as the test holds it (the shard, its digest, the last subjects seen).
+type e2e struct {
+	t                  *testing.T
+	ctx                context.Context
+	w                  *sectest.World
+	admin              *pgx.Conn
+	iam                *iamModule
+	stopIAM            func()
+	pgPassword, busURL string
+	src                sdkauthz.GRPCSource
+	held               sdkauthz.Held
+	subjects           map[string]sdkauthz.SubjectEntry
+	root, east         string
+}
+
+// verify opens demo/orders' view through the SDK's own client.
+func (e *e2e) verify(held ...sdkauthz.Held) sdkauthz.VerifyAnswer {
+	ans, err := e.src.Verify(e.ctx, sdkauthz.VerifyRequest{Component: "demo/orders", Nonce: "n1", Held: held})
+	require.NoError(e.t, err, "the view opens: canonical, its digest, the schema")
+	require.Len(e.t, ans.Shards, 1)
+	return ans
+}
+
+// segmentsOf verifies demo/orders' view and returns a principal's segments in the last view seen.
+func (e *e2e) segmentsOf(p string) []sdkauthz.Segment {
+	ans := e.verify(e.held)
+	if ans.Shards[0].Status == "changed" {
+		e.held.Digest, e.subjects = ans.Shards[0].View.Digest, ans.Shards[0].View.Subjects
+	}
+	return e.subjects[p].Segments
+}
+
+// inView: the principal has a segment in demo/orders' view.
+func (e *e2e) inView(p string) bool { return len(e.segmentsOf(p)) > 0 }
+
+// startE2E migrates and starts the member against PostgreSQL, the stand-in identity member and a bus of its own,
+// and waits until it verifies its own view.
+func startE2E(t *testing.T) *e2e {
 	pgPassword := os.Getenv("AUTHZ_IT_PG_PASSWORD")
 	if pgPassword == "" {
 		t.Fatal("AUTHZ_IT_PG_PASSWORD is not set")
@@ -88,7 +141,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	admin, err := pgx.Connect(ctx, "postgres://postgres:"+url.QueryEscape(pgPassword)+"@localhost:5432/"+itDB+"?sslmode=disable")
 	require.NoError(t, err)
-	defer admin.Close(ctx)
+	t.Cleanup(func() { admin.Close(ctx) })
 	_, err = admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+itSchema+" CASCADE; CREATE SCHEMA "+itSchema+
 		"; DROP SCHEMA IF EXISTS "+iamSchema+" CASCADE; CREATE SCHEMA "+iamSchema+"; DROP SCHEMA IF EXISTS "+busSchema+" CASCADE; CREATE SCHEMA "+busSchema)
 	require.NoError(t, err)
@@ -140,6 +193,13 @@ func TestMemberEndToEnd(t *testing.T) {
 	require.True(t, ready)
 	waitForView(t, w, sectest.Alice) // the account projection aligned with the identity member: views renew
 
+	return &e2e{t: t, ctx: ctx, w: w, admin: admin, iam: iam, stopIAM: stopIAM, pgPassword: pgPassword, busURL: busURL}
+}
+
+// definitionsAndViews: a component's definitions over mTLS, then its view through the SDK's own client.
+func (e *e2e) definitionsAndViews() {
+	t, w, ctx := e.t, e.w, e.ctx
+	var err error
 	// a component over mTLS: its definitions, then its view through the SDK's own client
 	conn := dial(t, w, "demo/orders")
 	defs := authzv3.NewDefinitionServiceClient(conn)
@@ -162,13 +222,8 @@ func TestMemberEndToEnd(t *testing.T) {
 	_, err = defs.Submit(ctx, &authzv3.SubmitRequest{Component: "erp/sales", Version: "1"})
 	assert.Error(t, err, "a component submits only for itself")
 
-	src := sdkauthz.GRPCSource{Conn: conn}
-	verify := func(held ...sdkauthz.Held) sdkauthz.VerifyAnswer {
-		ans, err := src.Verify(ctx, sdkauthz.VerifyRequest{Component: "demo/orders", Nonce: "n1", Held: held})
-		require.NoError(t, err, "the view opens: canonical, its digest, the schema")
-		require.Len(t, ans.Shards, 1)
-		return ans
-	}
+	e.src = sdkauthz.GRPCSource{Conn: conn}
+	verify := e.verify
 	ans := verify()
 	assert.Equal(t, "changed", ans.Shards[0].Status)
 	assert.Equal(t, "authz-it-instance", ans.Instance)
@@ -176,6 +231,14 @@ func TestMemberEndToEnd(t *testing.T) {
 	held := sdkauthz.Held{Shard: ans.Shards[0].Shard, Digest: ans.Shards[0].View.Digest}
 	assert.Equal(t, "unchanged", verify(held).Shards[0].Status)
 
+	e.held = held
+}
+
+// effectPoint: the effect point's first story: units, holdings, grants within and beyond a limit, keys, revocation,
+// the last admin.
+func (e *e2e) effectPoint() {
+	t, w, ctx, verify, held := e.t, e.w, e.ctx, e.verify, e.held
+	defer func() { e.held = held }()
 	// the effect point: Alice (the install claim) sets up a unit limited to the east and lets Bob manage it
 	units := listRecords(t, w, sectest.Alice, "management_unit")
 	require.Len(t, units, 1)
@@ -226,7 +289,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	assert.Equal(t, "PERMISSION_DENIED", outside["reason"], "Bob does not manage the root")
 
 	// the grant reaches demo/orders' view at its next verification; a revocation leaves it at the next one
-	ans = verify(held)
+	ans := verify(held)
 	require.Equal(t, "changed", ans.Shards[0].Status)
 	require.Contains(t, ans.Shards[0].View.Subjects, carol)
 	held.Digest = ans.Shards[0].View.Digest
@@ -246,6 +309,13 @@ func TestMemberEndToEnd(t *testing.T) {
 	last := submitChange(t, w, sectest.Alice, tightenReq("e1", aliceHolding), 409)
 	assert.Equal(t, "LAST_ADMIN_PROTECTED", last["reason"])
 
+	e.root, e.east = root, eastID
+}
+
+// lifecycle is T4's first part: narrowing, stale revisions, splitting, renewals, terminations, validity.
+func (e *e2e) lifecycle() {
+	t, w, admin, ctx, verify, held, root := e.t, e.w, e.admin, e.ctx, e.verify, e.held, e.root
+	defer func() { e.held = held }()
 	// T4: the lifecycle at the effect point (security 08): records read back from the table
 	type row struct {
 		State, EndReason   string
@@ -330,33 +400,23 @@ func TestMemberEndToEnd(t *testing.T) {
 	past := submitChange(t, w, sectest.Alice, map[string]any{"change_key": "t11", "direction": "widen",
 		"candidate": json.RawMessage(cand), "candidate_digest": candidateDigest("grant", cand)}, 200)
 	assert.Equal(t, "active", recordRow(past["record"]).State)
-	ans = verify(held)
+	ans := verify(held)
 	if ans.Shards[0].Status == "changed" {
 		held.Digest = ans.Shards[0].View.Digest
 		assert.NotContains(t, ans.Shards[0].View.Subjects, carol, "past its validity: not in the view")
 	} else {
 		t.Fatalf("the view did not change after an applied change: %s", ans.Shards[0].Status)
 	}
-	subjects := ans.Shards[0].View.Subjects // the last view seen; "unchanged" answers carry none
-	testScheduled(t, w, admin, root, eastID, func(p string) bool {
-		ans := verify(held)
-		if ans.Shards[0].Status == "changed" {
-			held.Digest, subjects = ans.Shards[0].View.Digest, ans.Shards[0].View.Subjects
-		}
-		return len(subjects[p].Segments) > 0
-	})
-	testNeutral(t, w, admin, root, eastID)
-	segmentsOf := func(p string) []sdkauthz.Segment {
-		ans := verify(held)
-		if ans.Shards[0].Status == "changed" {
-			held.Digest, subjects = ans.Shards[0].View.Digest, ans.Shards[0].View.Subjects
-		}
-		return subjects[p].Segments
-	}
-	testEffective(t, w, admin, root, segmentsOf)
-	testUncomputable(t, w, admin, root, segmentsOf)
-	testRelinquish(t, w, admin, root)
+	e.subjects = ans.Shards[0].View.Subjects // the last view seen; "unchanged" answers carry none
+}
 
+// identity is T3: the identity member's account status in the views, stale tokens, the source going quiet.
+func (e *e2e) identity() {
+	t, w, admin, ctx, verify, held, root, eastID := e.t, e.w, e.admin, e.ctx, e.verify, e.held, e.root, e.east
+	iam, stopIAM, pgPassword, busURL := e.iam, e.stopIAM, e.pgPassword, e.busURL
+	defer func() { e.held = held }()
+	var code int
+	var out map[string]any
 	// T3: the identity member's account status reaches the views (security 03's internal sources; P8.25)
 	again4 := submitChange(t, w, sectest.Alice, grantReq("b4", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
 	require.NotEmpty(t, again4["record"])
@@ -371,15 +431,15 @@ func TestMemberEndToEnd(t *testing.T) {
 		}, 10*time.Second, 200*time.Millisecond)
 		return e
 	}
-	e := carolNow(func(e sdkauthz.SubjectEntry) bool { return len(e.Segments) > 0 })
-	assert.EqualValues(t, 1, e.SecurityVersion, "the account's security version is in the view")
-	assert.False(t, e.AccountsDisabled)
+	entry := carolNow(func(e sdkauthz.SubjectEntry) bool { return len(e.Segments) > 0 })
+	assert.EqualValues(t, 1, entry.SecurityVersion, "the account's security version is in the view")
+	assert.False(t, entry.AccountsDisabled)
 	require.NoError(t, iam.set(ctx, carol, "active", 2)) // a password change at the identity member
 	carolNow(func(e sdkauthz.SubjectEntry) bool { return e.SecurityVersion == 2 })
 	// frozen: no access (the view says so), but nothing ends; an identity-side disposition holds it (T6)
 	require.NoError(t, iam.set(ctx, carol, "security_frozen", 3))
-	e = carolNow(func(e sdkauthz.SubjectEntry) bool { return e.AccountsDisabled })
-	assert.EqualValues(t, 3, e.SecurityVersion)
+	entry = carolNow(func(e sdkauthz.SubjectEntry) bool { return e.AccountsDisabled })
+	assert.EqualValues(t, 3, entry.SecurityVersion)
 
 	// disabled: the account ended as a source; the closure job ends what it was a source of (security 08), a grant
 	// and a holding, once its status is applied
@@ -461,7 +521,11 @@ func TestMemberEndToEnd(t *testing.T) {
 	}, 10*time.Second, 200*time.Millisecond, "the same key, once the source answers")
 	stopIAM()
 
-	// every applied change was audited in its transaction
+}
+
+// audited: every applied change was audited in its transaction.
+func (e *e2e) audited() {
+	t, admin, ctx := e.t, e.admin, e.ctx
 	var audited int
 	require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_audit_log WHERE category = 'security_change'").Scan(&audited))
 	assert.GreaterOrEqual(t, audited, 6, "install claim, unit, holding, two grants, revocation")
