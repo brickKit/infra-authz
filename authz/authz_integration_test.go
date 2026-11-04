@@ -345,13 +345,15 @@ func TestMemberEndToEnd(t *testing.T) {
 		return len(subjects[p].Segments) > 0
 	})
 	testNeutral(t, w, admin, root, eastID)
-	testEffective(t, w, admin, root, func(p string) []sdkauthz.Segment {
+	segmentsOf := func(p string) []sdkauthz.Segment {
 		ans := verify(held)
 		if ans.Shards[0].Status == "changed" {
 			held.Digest, subjects = ans.Shards[0].View.Digest, ans.Shards[0].View.Subjects
 		}
 		return subjects[p].Segments
-	})
+	}
+	testEffective(t, w, admin, root, segmentsOf)
+	testUncomputable(t, w, admin, root, segmentsOf)
 
 	// T3: the identity member's account status reaches the views (security 03's internal sources; P8.25)
 	again4 := submitChange(t, w, sectest.Alice, grantReq("b4", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)

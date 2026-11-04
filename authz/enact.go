@@ -24,6 +24,10 @@ func (m *Module) enact(ctx context.Context, tx db.Tx, e entry, p plan, v verdict
 	case outRejected:
 		res.Outcome, res.Detail = "rejected", "row "+strconv.Itoa(v.Row)
 		switch {
+		case p.restore: // a restore rejected: the record stays held (an operator's to look at)
+			res.Record = p.target.ID
+			m.rt.Logger.Warn("a held record's restore was rejected; it stays held", "record", p.target.ID, "reason", v.Reason)
+			return res, nil
 		case p.activate: // a job's widening of a saved record rejected, whatever the row: ended (rejected)
 			res.Record = p.target.ID
 			_, err := m.transition(ctx, tx, p.target.ID, "ended", "rejected", "", change, v.Reason)
@@ -61,6 +65,7 @@ func (m *Module) enact(ctx context.Context, tx db.Tx, e entry, p plan, v verdict
 		}
 		return m.save(ctx, tx, e, p, "awaiting_confirmation")
 	}
+	p.review = v.Outcome == outAppliedReview
 	return m.apply(ctx, tx, e, p, change)
 }
 
@@ -91,6 +96,14 @@ func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change st
 	case p.activate:
 		id = p.target.ID
 		if stateRev, err = m.transition(ctx, tx, id, "active", "", "", change, ""); err != nil {
+			return res, err
+		}
+	case p.restore: // held (uncomputable) back to active; partly outside: to be reviewed (row 30)
+		id = p.target.ID
+		if stateRev, err = m.transition(ctx, tx, id, "active", "", "", change, ""); err != nil {
+			return res, err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE authz_record SET review = $2 WHERE id = $1", id, p.review); err != nil {
 			return res, err
 		}
 	case p.target == nil:
@@ -133,6 +146,13 @@ func (m *Module) apply(ctx context.Context, tx db.Tx, e entry, p plan, change st
 			if err := m.closeAfter(ctx, tx, "management_unit", p.successor); err != nil {
 				return res, err
 			}
+		}
+	}
+	// a held (uncomputable) record narrowed: its state revision moved, so a restore registered before is void (row 3);
+	// its unit's closure looks at it again with the new content (CP115)
+	if t := p.target; t != nil && p.kind == Tighten && p.endReason == "" && t.State == "held" && t.HoldReason == "uncomputable" {
+		if err := m.closeAfter(ctx, tx, "management_unit", recordUnit(t)); err != nil {
+			return res, err
 		}
 	}
 	// a source that tightened (ended or narrowed): the closure job keeps the books of what depends on it

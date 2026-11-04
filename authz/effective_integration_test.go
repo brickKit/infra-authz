@@ -144,6 +144,8 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 	t.Cleanup(func() {
 		_, _ = admin.Exec(context.Background(), "UPDATE "+itSchema+".authz_dependency_index SET complete = true")
 	})
+	var since time.Time
+	require.NoError(t, admin.QueryRow(ctx, "SELECT now()").Scan(&since))
 	raw, _ = json.Marshal(map[string]any{"name": "other", "parent": root, "managed_scope": []sdkauthz.Segment{orderSeg(region("east"))},
 		"grantable_operations": []string{"demo.order.read"}})
 	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "efx1", "direction": "tighten", "target": other["record"],
@@ -154,6 +156,13 @@ func testEffective(t *testing.T, w *sectest.World, admin *pgx.Conn, root string,
 			other["record"]).Scan(&n))
 		return n == 1
 	}, 10*time.Second, 100*time.Millisecond, "the domain marked for review")
+	closures := func() (n int) {
+		require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_work_item WHERE job = $1 AND created_at >= $2",
+			JobClosure, since).Scan(&n))
+		return
+	}
+	assert.Never(t, func() bool { return closures() > 1 }, time.Second, 100*time.Millisecond,
+		"the scan covers every unit: it does not go on to each one's closure, which would scan again")
 	_, err = admin.Exec(ctx, "UPDATE "+itSchema+".authz_dependency_index SET complete = true WHERE kind = 'management_unit'")
 	require.NoError(t, err)
 

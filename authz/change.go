@@ -79,6 +79,8 @@ type plan struct {
 	target    *target
 	endReason string // what an applied tightening ends the target with ("": a narrowing)
 	activate  bool   // a saved widening (scheduled) that takes effect
+	restore   bool   // a held (uncomputable) record restored
+	review    bool   // applied, partly outside its limits: to be reviewed (row 30)
 	from, to  *time.Time
 	at        *time.Time // effective_from
 	successor string     // the predecessor that a new record supersedes

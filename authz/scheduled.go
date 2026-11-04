@@ -21,8 +21,12 @@ import (
 // JobDue is the timed work item of a saved record (protocol 01, P7.24: enqueued with its run time).
 const JobDue = "infra.authz.due"
 
-// Trigger kinds of a derived key, and the state each starts from (security 08, "状态迁移").
-const triggerScheduled = "scheduled"
+// Trigger kinds of a derived key, and the state each starts from (security 08, "状态迁移"): a scheduled record due,
+// a held (uncomputable) record whose sources can be computed again (the closure job registers it).
+const (
+	triggerScheduled = "scheduled"
+	triggerRestore   = "restore"
+)
 
 // MaxProcessingWait is how long a job waits on "processing" before it goes to an operator (security 08's parameter
 // table: 24 hours).
@@ -46,6 +50,8 @@ func (a firing) from() string {
 	switch a.Trigger {
 	case triggerScheduled:
 		return "scheduled"
+	case triggerRestore:
+		return "held"
 	}
 	return ""
 }
@@ -73,7 +79,11 @@ func (m *Module) due(ctx context.Context, r *work.Run) error {
 	if err := json.Unmarshal(r.Args, &a); err != nil || a.from() == "" {
 		return work.Permanent(fmt.Errorf("not a saved record's job: %s", r.Args))
 	}
-	e := entry{namespace: ID, key: a.key(), digest: a.digest(), trigger: ByJob, job: &a, req: request{Direction: Widen}}
+	direction := Widen
+	if a.Trigger == triggerRestore {
+		direction = RestoreUncomputable
+	}
+	e := entry{namespace: ID, key: a.key(), digest: a.digest(), trigger: ByJob, job: &a, req: request{Direction: direction}}
 	var res changeResult
 	err := r.Complete(ctx, func(ctx context.Context, tx db.Tx) error {
 		err := tx.QueryRow(ctx, "SELECT requested_by FROM authz_record WHERE id = $1", a.Record).Scan(&e.requester)

@@ -81,8 +81,8 @@ func (m *Module) factsOf(ctx context.Context, tx db.Tx, e entry) (facts, plan, *
 	default:
 		pre = invalid("a change is a widening with a candidate, or names its target")
 	}
-	if err != nil || pre != nil || !f.FromState || !f.FromRevision {
-		return f, p, pre, err
+	if err != nil || pre != nil || !f.FromState || !f.FromRevision || f.Kind == RestoreUncomputable {
+		return f, p, pre, err // a restore of an uncomputable record does not check the original requester again
 	}
 	p.kind = f.Kind
 	err = m.eligibility(ctx, tx, e.requester, structural, &f)
@@ -153,6 +153,9 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 	if f.FromState, f.FromRevision = t.State == e.job.from(), t.StateRevision == e.job.StateRevision; !f.FromState || !f.FromRevision {
 		return false, nil, nil
 	}
+	if e.job.Trigger == triggerRestore {
+		return m.restoring(t, s, f, p)
+	}
 	p.target, p.activate, p.recType = t, true, t.Type
 	p.from, p.to, p.at, f.Future = t.ValidFrom, t.ValidUntil, t.EffectiveAt, t.Future
 	structural, bad, pre, err := m.widening(ctx, tx, e.requester, t.Type, t.Body, true, s, f, p)
@@ -170,6 +173,33 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 		}
 	}
 	return structural, nil, nil
+}
+
+// restoring reads a held (uncomputable) record whose sources can be computed again (security 08,
+// restore_uncomputable): its effective segments now decide (row 25 kept held when nothing is left, row 30 effective
+// and to be reviewed when partly outside); the original requester's eligibility and confirmations are not checked
+// again (D36: a grantor stepping down does not undo an effective grant).
+func (m *Module) restoring(t *target, s standing, f *facts, p *plan) (bool, *changeResult, error) {
+	f.Kind, p.target, p.restore, p.recType, f.Eligible = RestoreUncomputable, t, true, t.Type, proven
+	if t.HoldReason != "uncomputable" {
+		f.FromState = false
+		return true, nil, nil
+	}
+	unit, segs, grantee := "", []sdkauthz.Segment(nil), ""
+	switch t.Type {
+	case "grant":
+		var b grantBody
+		_ = json.Unmarshal(t.Body, &b)
+		unit, segs, grantee = b.GovernanceUnit, b.Segments, b.Grantee
+	case "management_unit":
+		var b unitBody
+		_ = json.Unmarshal(t.Body, &b)
+		unit, segs, f.ManagementWiden = b.Parent, b.ManagedScope, true
+	}
+	lim := s.limits.of(unit)
+	f.RestoredEmpty = lim == nil || !lim.computable(segs) || !lim.all && len(lim.cut(segs, grantee)) == 0
+	f.PartlyOutside = !lim.covers(segs, grantee)
+	return true, nil, nil
 }
 
 // widening checks a widening's record-specific fields against the security records as they stand: whether the

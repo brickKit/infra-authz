@@ -113,12 +113,12 @@ func (m *Module) closure(ctx context.Context, r *work.Run) error {
 			}
 			w.ended[a.Ref] = ended
 		}
-		ids, err := m.dependents(ctx, tx, a, w)
+		ids, scanned, err := m.dependents(ctx, tx, a, w)
 		if err != nil {
 			return err
 		}
 		for _, id := range ids {
-			if err := m.keepBooks(ctx, tx, w, id); err != nil {
+			if err := m.keepBooks(ctx, tx, w, id, !scanned); err != nil {
 				return err
 			}
 		}
@@ -160,7 +160,9 @@ func (m *Module) accountEnded(ctx context.Context, tx db.Tx, principal string) (
 // dependents are the records a source's change may affect: by the index, or, when the index of its kind is not
 // complete, every record of the types it can be a source of, and the whole domain is marked for review (security
 // 08: never "nobody is affected" on an index that cannot say).
-func (m *Module) dependents(ctx context.Context, tx db.Tx, a closing, w sources) ([]string, error) {
+// scanned: the index could not say, every record of those types is here, so the closure does not go on to dependent
+// units' own closures (they are in the scan already; going on would scan again for each of them).
+func (m *Module) dependents(ctx context.Context, tx db.Tx, a closing, w sources) (ids []string, scanned bool, err error) {
 	refs := []string{a.Ref} // a unit: every record that is the same current unit (superseded ones included)
 	if a.Kind == "management_unit" {
 		for id := range w.units {
@@ -170,9 +172,9 @@ func (m *Module) dependents(ctx context.Context, tx db.Tx, a closing, w sources)
 		}
 	}
 	var complete bool
-	err := tx.QueryRow(ctx, "SELECT complete FROM authz_dependency_index WHERE kind = $1", a.Kind).Scan(&complete)
+	err = tx.QueryRow(ctx, "SELECT complete FROM authz_dependency_index WHERE kind = $1", a.Kind).Scan(&complete)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, err
+		return nil, false, err
 	}
 	var rows pgx.Rows
 	if complete {
@@ -181,7 +183,7 @@ func (m *Module) dependents(ctx context.Context, tx db.Tx, a closing, w sources)
 	} else {
 		if _, err := tx.Exec(ctx, `INSERT INTO authz_review_domain (kind, ref) VALUES ($1, $2)
 			ON CONFLICT (kind, ref) DO UPDATE SET marked_at = now()`, a.Kind, a.Ref); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		m.rt.Logger.Warn("the dependency index is not complete: the whole source domain is to be reviewed",
 			"kind", a.Kind, "ref", a.Ref)
@@ -189,9 +191,10 @@ func (m *Module) dependents(ctx context.Context, tx db.Tx, a closing, w sources)
 			AND record_type = ANY($1) ORDER BY id`, dependentTypes[a.Kind])
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return pgx.CollectRows(rows, pgx.RowTo[string])
+	ids, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	return ids, !complete, err
 }
 
 // sources is what the books are kept against: the active units with their effective limits, and the active role
@@ -269,15 +272,21 @@ func assessWithin(w sources, unit string, segs []sdkauthz.Segment, grantee strin
 	return booked{review: !lim.covers(segs, grantee)}
 }
 
-// keepBooks moves one record by its assessment; a unit's closure goes on to its own dependents.
-func (m *Module) keepBooks(ctx context.Context, tx db.Tx, w sources, id string) error {
+// keepBooks moves one record by its assessment; a unit's closure goes on to its own dependents (cascade).
+func (m *Module) keepBooks(ctx context.Context, tx db.Tx, w sources, id string, cascade bool) error {
 	t, err := lockTarget(ctx, tx, id)
 	if err != nil || t == nil || (t.State != "active" && t.State != "held") {
 		return err
 	}
 	v := assess(t, w)
 	switch {
-	case v.state == "held" && t.State == "held": // held already (its restore is the effect point's)
+	case v.state == "held" && t.State == "held": // held already, still not computable
+	case v.state == "" && t.State == "held" && t.HoldReason == "uncomputable":
+		// computable again: its restore is the effect point's, under a derived key with this state revision
+		if _, err := m.rt.Work.Enqueue(ctx, tx, JobDue, firing{Record: id, StateRevision: t.StateRevision,
+			Trigger: triggerRestore}); err != nil {
+			return err
+		}
 	case v.state != "":
 		if _, err := m.transition(ctx, tx, id, v.state, v.endReason, v.holdReason, "", ""); err != nil {
 			return err
@@ -292,7 +301,7 @@ func (m *Module) keepBooks(ctx context.Context, tx db.Tx, w sources, id string) 
 			return err
 		}
 	}
-	if t.Type == "management_unit" {
+	if t.Type == "management_unit" && cascade {
 		return m.closeAfter(ctx, tx, t.Type, id) // its effective limit moved with its parent's
 	}
 	return nil
