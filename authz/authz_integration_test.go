@@ -101,6 +101,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	e.releases()
 	e.bounded()
 	e.delegation()
+	e.handover()
 	e.identitySide()
 	e.lastAdmin()
 	e.pending()
