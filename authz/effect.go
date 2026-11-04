@@ -203,28 +203,3 @@ func (m *Module) resourceFor(ctx context.Context, tx db.Tx, typ string) (*sdkaut
 	}
 	return resourceOf(body), nil
 }
-
-// numbersAsText makes a decoded request encodable canonically: numbers as text (no floating point), no nulls.
-func numbersAsText(v any) any {
-	switch x := v.(type) {
-	case float64:
-		return fmt.Sprint(x)
-	case []any:
-		out := x[:0]
-		for _, e := range x {
-			if e != nil {
-				out = append(out, numbersAsText(e))
-			}
-		}
-		return out
-	case map[string]any:
-		for k, e := range x {
-			if e == nil {
-				delete(x, k)
-			} else {
-				x[k] = numbersAsText(e)
-			}
-		}
-	}
-	return v
-}

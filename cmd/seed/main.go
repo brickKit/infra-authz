@@ -50,7 +50,7 @@ func main() {
 	check(err)
 	segs := []sdkauthz.Segment{}
 	for _, op := range []string{"infra.authz.security_record.read", "infra.authz.security_record.change"} {
-		s := seed.Segment("infra.authz.security_record", op)
+		s := seed.Segment("infra.authz.security_record", op, "holder") // every holder's records (D82)
 		s.ReadFields = []string{"id", "record_type", "state", "body"}
 		segs = append(segs, s)
 	}

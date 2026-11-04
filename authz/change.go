@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -206,23 +207,22 @@ func binds(v verdict, trigger string) bool {
 // requestDigest is the identity of a change's content under its key: the request in canonical form (09a).
 func requestDigest(requester string, req request) (string, error) {
 	body, _ := json.Marshal(req)
+	d := json.NewDecoder(bytes.NewReader(body))
+	d.UseNumber()
 	var v map[string]any
-	_ = json.Unmarshal(body, &v)
+	_ = d.Decode(&v)
 	v["requested_by"], v["trigger"] = requester, ByUser
-	d, err := canon.Digest("be.security.change_request", 1, numbersAsText(v))
+	digest, err := canon.Digest("be.security.change_request", 1, v)
 	if err != nil {
 		return "", errs.New(errs.ReasonRequestInvalid, "the change cannot be encoded: "+err.Error())
 	}
-	return d, nil
+	return digest, nil
 }
 
-// candidateDigest is the digest a candidate carries: its canonical form under its record type (09a).
+// candidateDigest is the digest a candidate carries (09a, the SDK's CandidateDigest); "" when it has none (not an
+// object, a float, a null), which no request's digest equals.
 func candidateDigest(recordType string, raw json.RawMessage) string {
-	var v any
-	if json.Unmarshal(raw, &v) != nil {
-		return ""
-	}
-	d, err := canon.Digest("be.security."+recordType, 1, numbersAsText(v))
+	d, err := sdkauthz.CandidateDigest(recordType, raw)
 	if err != nil {
 		return ""
 	}

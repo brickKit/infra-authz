@@ -13,7 +13,7 @@
 
 账号状态来自身份成员（安全 03 的内部来源）：本组件以带水位的投影保存它（补取、按 ID 批量读取与快照都是身份成员系统面上的标准方法），视图里每个主体带账号是否停用与安全状态版本（入口组件据此判令牌陈旧）。身份来源的水位超过 `AUTHZ_SOURCE_HIGH`（`D_src_high`，起始 1 分钟）时，视图只为普通读取续发，高风险操作在它的有效期过后关闭；超过 `AUTHZ_SOURCE_READ`（`D_src_read`，起始 10 分钟）、或投影还没对齐时，视图关闭，受保护的请求答可重试的 `AUTHORIZATION_VIEW_EXPIRED`。单个账号的状态无法证明时（它的事件被隔离），这个主体不进视图，其他主体照常。部署第一次启动、投影对齐之前，全部视图关闭。
 
-当前版本是代表部署实验第 5 步做到的范围。下面这些没有做，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
+记录有完整的生命周期（安全 08）：待生效的到点生效，来源收紧后视图立即缩小（授予只在治理单元逐级到根的当前上限之内有效），之后由闭包作业把记录记为结束或暂停；持有者可以放弃自己的授予与管理持有资格（`POST /api/authz/relinquishments`）。3.0.17 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
 - 确认与受保护操作；
 - 严格路径（A、B 档）；
 - 成员切换；
@@ -72,22 +72,25 @@
   | `POST /api/authz/relinquishments` | `infra.authz.security_record.relinquish` | 放弃自己的一整条授予或管理持有资格（D82）：谁也不用授予，本组件给每个持有者一段固定的段 |
   | `GET /api/authz/records?type=` | `infra.authz.security_record.read` | 调用者看得到的有效安全记录：管理者看全部，持有者只看自己的（维度 `holder`） |
 
-`POST /api/authz/changes` 的请求体带 `change_key` 与 `action`。`action` 取下面之一：
+`POST /api/authz/changes` 的请求体是安全 09a 的 `be.security.change_request`（`requested_by` 与触发方式由本组件从令牌得出，不在请求里）：
 
-| `action` | 做什么 |
-| --- | --- |
-| `unit.create` | 在 `unit` 下建子职责单元，带 `managed_scope` 与 `grantable_operations`，必须被父单元包含 |
-| `holding.create` | 让 `holder` 持有 `unit`；`system_role` 可以是 `authorization_admin` |
-| `holding.end` | 结束 `target` |
-| `role.create` | `name` 与 `segments_template` |
-| `grant.create` | 在 `unit` 下授予 `grantee`，带 `segments` 或 `role_revision` |
-| `grant.revoke` | 撤销 `target` |
+| 方向 | 字段 | 做什么 |
+| --- | --- | --- |
+| `widen`（新记录） | `candidate`（带 `record_type`：`management_unit`、`management_holding`、`role_revision`、`grant`，可带 `valid` 与 `predecessor`）、`candidate_digest`、可选的 `effective_from` | 建新记录；带 `predecessor` 是续期或扩大（新记录必须包含旧的，生效时旧的以 `superseded` 结束）；`effective_from` 在未来的保存为待生效，到点由本组件进生效点 |
+| `tighten` | `target`，可选的 `expected_state_revision`、`expected_revision` | 撤销或放弃整条记录 |
+| `tighten` | `target`、`candidate`、`candidate_digest` | 收窄：同一记录的新内容修订，候选必须在原内容之内 |
+| `tighten` | `target`、`termination`（`withdraw`、`cancel`）、`expected_state_revision` | 终止尚未生效的记录（收回自己的申请、管理者取消） |
+| `neutral` | `target`、`candidate`、`candidate_digest` | 只改管理单元或角色修订的名称 |
 
-已绑定的变更键原样返回上次的结果，换了内容答 `CHANGE_KEY_CONFLICT`。其他拒绝的原因：
-- `PERMISSION_DENIED`：请求者不管理该单元；
-- `CONTAINMENT_NOT_PROVEN`：超出上限，附上是哪个维度；
+`candidate_digest` 是候选在 `be.security.<record_type>` 下的规范形式的摘要（`be-sdk-go` 的 `authz.CandidateDigest`）。同时收紧与放宽的变更拆成两步，先收紧后放宽。
+
+回答是 `be.security.change_result`：`applied`（200）；`processing`、`awaiting_confirmation`、`scheduled`（202）；拒绝是错误，原因见下。生效、终局的拒绝与保存了记录的结果占用变更键：同一个键同样的内容原样返回上次的结果，换了内容答 `CHANGE_KEY_CONFLICT`；处理中与可重试的拒绝不占用，同一个键稍后再交。结果不明时用 `GET /api/authz/changes/{change_key}` 查，没有绑定的答 `unbound`。拒绝的原因：
+- `PERMISSION_DENIED`：请求者无权（不管理该单元，或不是记录的持有者）；
+- `CONTAINMENT_NOT_PROVEN`：超出管理上限（按单元逐级到根的有效上限），附上是哪个维度；
 - `LAST_ADMIN_PROTECTED`：要移除的是最后一个授权管理员；
-- `CHANGE_REVISION_STALE`：目标已不是有效记录。
+- `CHANGE_REVISION_STALE`：目标的状态或内容已经变了；
+- `REQUEST_INVALID`：请求不成立（例如要求拆成两步）；`DEFINITION_PENDING`：引用的资源定义还在路上，可重试；
+- `ADMIN_AVAILABILITY_UNPROVABLE`（处理中）：请求者此刻的资格无法证明（身份来源停住），稍后再交。
 
 ## 外壳声明
 
