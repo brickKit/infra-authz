@@ -312,14 +312,11 @@ func TestMemberEndToEnd(t *testing.T) {
 	ended := submitChange(t, w, sectest.Alice, tightenReq("t8", renewed["record"]), 200)
 	assert.Equal(t, row{State: "ended", EndReason: "revoked", Revision: 1, StateRev: 2, Predecessor: wide["record"].(string)},
 		recordRow(ended["record"]), "a manager's revocation")
-	// a termination of an effective record is stale (row 4); a future widening waits for T4d
+	// a termination of an effective record is stale (row 4)
 	live := submitChange(t, w, sectest.Alice, grantReq("t9a", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
 	term := map[string]any{"change_key": "t9", "direction": "tighten", "target": live["record"], "termination": "cancel",
 		"expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}
 	assert.Equal(t, "CHANGE_REVISION_STALE", submitChange(t, w, sectest.Alice, term, 409)["reason"])
-	future := grantReq("t10", root, carol, []sdkauthz.Segment{orderSeg(region("east"))})
-	future["effective_from"] = time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
-	assert.Equal(t, "CAPABILITY_UNSUPPORTED", submitChange(t, w, sectest.Alice, future, 501)["reason"])
 	submitChange(t, w, sectest.Alice, tightenReq("t9b", live["record"]), 200)
 	// a record past its own validity gives no access at once, before anything ends it
 	cand, _ = json.Marshal(map[string]any{"record_type": "grant", "governance_unit": root, "grantee": carol,
@@ -335,6 +332,14 @@ func TestMemberEndToEnd(t *testing.T) {
 	} else {
 		t.Fatalf("the view did not change after an applied change: %s", ans.Shards[0].Status)
 	}
+	subjects := ans.Shards[0].View.Subjects // the last view seen; "unchanged" answers carry none
+	testScheduled(t, w, admin, root, eastID, func(p string) bool {
+		ans := verify(held)
+		if ans.Shards[0].Status == "changed" {
+			held.Digest, subjects = ans.Shards[0].View.Digest, ans.Shards[0].View.Subjects
+		}
+		return len(subjects[p].Segments) > 0
+	})
 
 	// T3: the identity member's account status reaches the views (security 03's internal sources; P8.25)
 	again4 := submitChange(t, w, sectest.Alice, grantReq("b4", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
@@ -369,7 +374,11 @@ func TestMemberEndToEnd(t *testing.T) {
 	assert.Equal(t, 200, code, "%v", out)
 
 	// the identity member goes quiet: past D_src_high (3 s) the views renew for ordinary reads only, past D_src_read
-	// (6 s) they close; once it answers again they renew fully (security 03's renewal and closing, P8.11)
+	// (6 s) they close; once it answers again they renew fully (security 03's renewal and closing, P8.11). A grant
+	// due meanwhile cannot prove its requester (row 9): the job waits, its attempt not counted, and takes effect once
+	// the source answers again (CP41, CP68)
+	waiting := submitChange(t, w, sectest.Alice, scheduledGrant("d5", root, sectest.Bob, []sdkauthz.Segment{orderSeg(region("east"))},
+		4*time.Second), 202)
 	stopIAM()
 	status := func() (string, bool) {
 		ans := verify(held)
@@ -384,9 +393,18 @@ func TestMemberEndToEnd(t *testing.T) {
 		"ordinary reads only")
 	require.Eventually(t, func() bool { st, _ := status(); return st == "closed" }, 10*time.Second, 200*time.Millisecond,
 		"closed")
+	require.Eventually(t, func() bool {
+		d := dueItemOf(t, admin, waiting["record"])
+		return d.State == "retry_wait" && d.Attempts == 0 && strings.Contains(d.LastError, "ADMIN_AVAILABILITY_UNPROVABLE")
+	}, 5*time.Second, 50*time.Millisecond, "due while the source is quiet: processing, a wait that spends no attempt")
+	assert.Equal(t, "scheduled", recordOf(t, admin, waiting["record"]).State, "no access while it waits")
+	assert.Empty(t, derivedBinding(t, admin, waiting["record"], 1, triggerScheduled), "processing binds nothing")
 	_, stopIAM = startIAM(t, w, pgPassword, busURL, false)
 	require.Eventually(t, func() bool { st, ro := status(); return st != "closed" && !ro }, 15*time.Second, 200*time.Millisecond,
 		"renewed fully again")
+	require.Eventually(t, func() bool { return recordOf(t, admin, waiting["record"]).State == "active" }, 10*time.Second,
+		100*time.Millisecond, "the source answers again: the waiting job takes effect")
+	assert.Equal(t, "applied", derivedBinding(t, admin, waiting["record"], 1, triggerScheduled))
 	stopIAM()
 
 	// every applied change was audited in its transaction
