@@ -104,6 +104,8 @@ type plan struct {
 	successor string     // the predecessor that a new record supersedes
 	// basis: the requester judged by the last applied facts (security 03); the result and the audit say so
 	basis map[string]any
+	// coolingOff: a protected widening the owner alone confirmed, waiting until then (cooling.go)
+	coolingOff *time.Time
 }
 
 // change runs one user change at the effect point.
@@ -175,9 +177,12 @@ func (m *Module) effect(ctx context.Context, tx db.Tx, e entry) (changeResult, v
 		}
 	}
 	v := decide(f)
-	if v.Row == 1 { // the bound result again
+	if v.Row == 1 { // the bound result again, with a saved record's current state (CP61)
 		var res changeResult
-		err := json.Unmarshal(bound, &res)
+		if err := json.Unmarshal(bound, &res); err != nil {
+			return res, v, err
+		}
+		res, err = current(ctx, tx, res)
 		return res, v, err
 	}
 	res, err := m.enact(ctx, tx, e, p, v)
@@ -195,6 +200,43 @@ func (m *Module) effect(ctx context.Context, tx db.Tx, e entry) (changeResult, v
 			VALUES ($1, $2, $3, $4, $5)`, e.namespace, e.key, e.digest, out, rec)
 	}
 	return res, v, err
+}
+
+// current is a bound result as it stands now (security 08, CP61: a retry answers the record and its current state).
+// A saved record (scheduled, awaiting confirmation) this member's own job applied or rejected since answers that job's
+// result; one ended otherwise (withdrawn, cancelled, a confirmer's rejection) answers rejected; the rest as bound.
+func current(ctx context.Context, tx db.Tx, res changeResult) (changeResult, error) {
+	if res.Record == "" || (res.Outcome != "scheduled" && res.Outcome != "awaiting_confirmation") {
+		return res, nil
+	}
+	key := res.ChangeKey
+	var later []byte
+	err := tx.QueryRow(ctx, `SELECT result FROM authz_change WHERE record = $1 AND requested_by = $2
+		AND result->>'outcome' IN ('applied', 'rejected') ORDER BY created_at DESC LIMIT 1`, res.Record, ID).Scan(&later)
+	switch {
+	case err == nil:
+		var out changeResult
+		if err := json.Unmarshal(later, &out); err != nil {
+			return res, err
+		}
+		out.ChangeKey = key
+		return out, nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return res, err
+	}
+	var state, endReason string
+	if err := tx.QueryRow(ctx, "SELECT state, coalesce(end_reason, '') FROM authz_record WHERE id = $1", res.Record).
+		Scan(&state, &endReason); err != nil {
+		return res, err
+	}
+	switch state {
+	case "ended":
+		return changeResult{ChangeKey: key, Outcome: "rejected", Reason: errs.ReasonChangeRevisionStale, Record: res.Record,
+			Detail: "the record ended (" + endReason + ") before it took effect"}, nil
+	case "scheduled", "awaiting_confirmation":
+		res.Outcome = state
+	}
+	return res, nil
 }
 
 // bindPre binds an answer given before the table when it is final: an invalid request (D77).

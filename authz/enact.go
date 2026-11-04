@@ -52,6 +52,11 @@ func (m *Module) enact(ctx context.Context, tx db.Tx, e entry, p plan, v verdict
 		return res, nil
 	case outScheduled:
 		if p.activate && e.job.Trigger == triggerConfirmed { // confirmed, effective later: scheduled, its own job registered
+			if p.coolingOff != nil { // its effective time first: a scheduled record has one
+				if err := m.coolOff(ctx, tx, p.target, *p.coolingOff); err != nil {
+					return res, err
+				}
+			}
 			rev, err := m.transition(ctx, tx, p.target.ID, "scheduled", "", "", change, "")
 			if err != nil {
 				return res, err

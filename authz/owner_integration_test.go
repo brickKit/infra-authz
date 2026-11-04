@@ -68,3 +68,16 @@ func protect(t *testing.T, w *sectest.World, who string, req map[string]any) map
 		50*time.Millisecond, "confirmed: the member's job applies it")
 	return map[string]any{"record": out["record"], "outcome": "applied"}
 }
+
+// protectBy is protect with another authorization admin's confirmation: while one is available, the owner's key does
+// not stand in for an independent person on a widening.
+func protectBy(t *testing.T, w *sectest.World, who, confirmer string, req map[string]any) map[string]any {
+	t.Helper()
+	out := submitChange(t, w, who, req, 202)
+	require.Equal(t, "awaiting_confirmation", out["outcome"], "%v", out)
+	code, c := call(t, w, confirmer, "POST", "/api/authz/confirmations", map[string]any{"target": out["record"]})
+	require.Equal(t, 201, code, "%v", c)
+	require.Eventually(t, func() bool { return recordOf(t, itAdmin, out["record"]).State == "active" }, 10*time.Second,
+		50*time.Millisecond, "confirmed: the member's job applies it")
+	return map[string]any{"record": out["record"], "outcome": "applied"}
+}

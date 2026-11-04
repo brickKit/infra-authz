@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/brickKit/be-sdk-go/v3/audit"
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/canon"
 	"github.com/brickKit/be-sdk-go/v3/db"
@@ -213,6 +214,18 @@ func (m *Module) confirm(ctx context.Context, confirmer string, in confirmIn) (s
 				return errs.New(errs.ReasonPermissionDenied, "the deployment owner's signature does not verify")
 			}
 			basis, who, until = basisOwner, ownerName, at
+			// every use of the owner's key is told to every authorization admin and the registered contacts (security
+			// 08); without a notification channel in this version, the audit and an error-level log carry it
+			m.rt.Logger.Error("the deployment owner's confirmation was used", "target", t.ID, "type", t.Type, "submitted_by", confirmer)
+			op := OpTighten // the operation that admitted it (admitConfirmation)
+			if t.State == "awaiting_confirmation" {
+				op = OpChange
+			}
+			if _, err := m.rt.Audit.Write(ctx, tx, audit.Record{Category: audit.SecurityChange, Operation: op,
+				Outcome: audit.Succeeded, Actor: confirmer, Target: map[string]any{"type": t.Type, "id": t.ID},
+				Changes: map[string]any{"action": "owner_confirmation"}}); err != nil {
+				return err
+			}
 		default:
 			return errs.New(errs.ReasonRequestInvalid, "basis is holding or deployment_owner")
 		}
@@ -312,6 +325,12 @@ func (m *Module) confirmationsOf(ctx context.Context, tx db.Tx, list []string, t
 		}
 	}
 	f.Confirmation, f.ConfirmersProvable = confirmValid, true
+	if widening && len(holding) > 0 { // only the owner's: the cooling-off may apply (cooling.go)
+		if err := tx.QueryRow(ctx, "SELECT bool_and(basis = $2) FROM authz_confirmation WHERE id::text = ANY($1)",
+			holding, basisOwner).Scan(&f.OwnerOnly); err != nil {
+			return nil, err
+		}
+	}
 	switch {
 	case !widening && len(invalid) > 0, widening && len(holding) == 0 && len(unprovableIDs) == 0:
 		f.Confirmation = confirmInvalid
@@ -365,7 +384,8 @@ func (m *Module) judgeConfirmation(ctx context.Context, tx db.Tx, id string, t *
 	return m.confirmerEligible(ctx, tx, c.Confirmer, lastApplied)
 }
 
-// othersAvailable: an authorization admin other than the requester and the object whose account is provably active.
+// othersAvailable: an authorization admin other than the requester and the object whose account is provably active,
+// or one the requester itself made unavailable within the cooling-off (CP108, cooling.go).
 func (m *Module) othersAvailable(ctx context.Context, tx db.Tx, requester, object string) (bool, error) {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT body->>'holder' FROM authz_record WHERE state = 'active'
 		AND record_type = 'management_holding' AND body->>'system_role' = 'authorization_admin'
@@ -382,7 +402,7 @@ func (m *Module) othersAvailable(ctx context.Context, tx db.Tx, requester, objec
 			return a.now == proven, err
 		}
 	}
-	return false, nil
+	return madeUnavailableBy(ctx, tx, requester, requester, object)
 }
 
 // useConfirmations marks the confirmations used by the change that applied with them.

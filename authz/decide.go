@@ -70,6 +70,9 @@ type facts struct {
 	BeyondTight bool
 	// Basis is not decided on: a change applied on the last applied facts says so in its audit (security 03)
 	Basis map[string]any
+	// OwnerOnly is not decided on: a saved widening whose holding confirmations are the deployment owner's only (the
+	// cooling-off, cooling.go)
+	OwnerOnly bool
 	// AffectsAdmins: the change affects an authorization admin holding's availability (or the index is incomplete).
 	AffectsAdmins bool
 	Confirmation  string

@@ -179,6 +179,21 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 	if p.confirmed, err = m.confirmationsOf(ctx, tx, nil, t, e.requester, recordHolder(t), false, f); err != nil {
 		return false, nil, err
 	}
+	// confirmed by the owner alone while another admin became unavailable within the cooling-off: it waits until
+	// the cooling-off ends (once: a record already waiting it out is not held again)
+	if e.job.Trigger == triggerConfirmed && f.OwnerOnly && t.CoolingOff == nil {
+		recent, err := m.recentlyUnavailable(ctx, tx, e.requester, recordHolder(t))
+		if err != nil {
+			return false, nil, err
+		}
+		if recent {
+			until := time.Now().Add(CoolingOff)
+			if p.at == nil || p.at.Before(until) {
+				p.at = &until
+			}
+			f.Future, p.coolingOff = true, &until
+		}
+	}
 	return structural, nil, nil
 }
 
@@ -340,8 +355,13 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 		case "withdraw":
 			f.TerminatorEligible = requester == t.RequestedBy
 			structural, p.endReason = f.TerminatorEligible, "withdrawn"
-		case "cancel":
-			structural, p.endReason = s.manages(unitOf), "cancelled"
+		case "cancel": // a manager's cancellation; or, in a cooling-off, any available admin's veto (row 7)
+			veto, err := m.vetoes(ctx, tx, requester, t)
+			if err != nil {
+				return false, nil, err
+			}
+			f.TerminatorEligible = veto
+			structural, p.endReason = veto || s.manages(unitOf), "cancelled"
 		case "reject": // a confirmer's rejection (row 7): someone who may confirm it now, not the applicant, not its object
 			f.Rejection, f.FromState, p.endReason = true, f.FromState && t.State == "awaiting_confirmation", "rejected"
 			ok, err := m.confirmerEligible(ctx, tx, requester, false)

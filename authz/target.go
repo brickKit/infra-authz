@@ -20,6 +20,10 @@ type target struct {
 	Body                                                                   json.RawMessage
 	EffectiveAt, ValidFrom, ValidUntil                                     *time.Time
 	Future                                                                 bool // effective_at is after the database's now
+	// CoolingOff: a protected widening the deployment owner confirmed, waiting out the cooling-off (security 08);
+	// InCoolingOff, that cooling-off is not over by the database's now
+	CoolingOff   *time.Time
+	InCoolingOff bool
 }
 
 var uuidText = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -32,9 +36,10 @@ func lockTarget(ctx context.Context, tx db.Tx, id string) (*target, error) {
 	var hold, pred, digest *string
 	err := tx.QueryRow(ctx, `SELECT id::text, record_type, state, hold_reason, requested_by, predecessor::text,
 			state_revision, revision, body, effective_at, valid_from, valid_until, coalesce(effective_at > now(), false),
-			candidate_digest
+			candidate_digest, cooling_off_until, coalesce(cooling_off_until > now(), false)
 		FROM authz_record WHERE id = $1 FOR UPDATE`, id).Scan(&t.ID, &t.Type, &t.State, &hold, &t.RequestedBy, &pred,
-		&t.StateRevision, &t.Revision, &t.Body, &t.EffectiveAt, &t.ValidFrom, &t.ValidUntil, &t.Future, &digest)
+		&t.StateRevision, &t.Revision, &t.Body, &t.EffectiveAt, &t.ValidFrom, &t.ValidUntil, &t.Future, &digest,
+		&t.CoolingOff, &t.InCoolingOff)
 	if digest != nil {
 		t.CandidateDigest = *digest
 	}

@@ -3,10 +3,13 @@
 package authz
 
 import (
+	"context"
+	"testing"
 	"time"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,22 +18,50 @@ import (
 // D_src_high (3 s) and it, short enough to wait past it.
 const itTight = 10 * time.Second
 
+// Grace and Heidi join after the identity phase (it changed the accounts of Bob, Carol, Dave and Eve).
+const (
+	grace = "0190f3a1-0000-7000-8000-0000000000f7"
+	heidi = "0190f3a1-0000-7000-8000-0000000000f8"
+)
+
+// bearer is who's token after the identity phase: Bob's account is at security version 2 since.
+func bearer(w *sectest.World, who string) string {
+	if who == sectest.Bob {
+		return "Bearer " + w.TokenAt(sectest.Bob, 2)
+	}
+	return w.Bearer(who)
+}
+
+// bobsAdminHolding is Bob's active authorization admin holding (testProtected gives it back to him at its end).
+func bobsAdminHolding(t *testing.T, admin *pgx.Conn) string {
+	var id string
+	require.NoError(t, admin.QueryRow(context.Background(), "SELECT id::text FROM "+itSchema+`.authz_record
+		WHERE state = 'active' AND record_type = 'management_holding' AND body->>'holder' = $1
+			AND body->>'system_role' = 'authorization_admin'`, sectest.Bob).Scan(&id))
+	return id
+}
+
 // staleTightening is T5e (security 03's tightening-only operations, A125, P8.29, P9.34): with the identity source
 // stopped, tightenings stay possible on the source's last applied facts. Within T_tight one person revokes alone
 // (AT57, CP36); beyond it a second authorization admin, judged by the last applied facts too, confirms first (AT61,
 // CP80), or the deployment owner does (AT64); a tightening that touches an authorization admin's availability (the
 // holding, a unit one sits in, or a unit above that) waits for a requester or confirmer proven now (AT58, row 12). Each says "basis not
-// proven latest" in its result and its audit. Widenings go to their own route, never this one.
+// proven latest" in its result and its audit. Widenings go to their own route, never this one. It runs after the
+// identity phase, which leaves the identity member stopped: it starts it again first.
 func (e *e2e) staleTightening() {
 	t, w, admin, ctx, root := e.t, e.w, e.admin, e.ctx, e.root
 	seg := []sdkauthz.Segment{orderSeg(region("east"))}
+	e.iam, e.stopIAM = startIAM(t, w, e.pgPassword, e.busURL, false)
+	for _, p := range []string{grace, heidi} {
+		require.NoError(t, e.iam.set(ctx, p, "active", 1))
+	}
 	confirmBy := func(who string, target any, revision string) map[string]any {
 		t.Helper()
 		body := map[string]any{"target": target}
 		if revision != "" {
 			body["expected_revision"] = map[string]any{"domain": "authz.record.revision", "value": revision}
 		}
-		code, out := call(t, w, who, "POST", "/api/authz/confirmations", body)
+		code, out := callAs(t, bearer(w, who), "POST", "/api/authz/confirmations", body)
 		require.Equal(t, 201, code, "%v", out)
 		return out
 	}
@@ -49,11 +80,15 @@ func (e *e2e) staleTightening() {
 		return op, basis
 	}
 
-	// a second authorization admin, a unit under the root with an admin holding in it, and four ordinary grants
-	bobAdmin := protect(t, w, sectest.Alice, widenReq("st1", "management_holding",
-		map[string]any{"unit": root, "holder": sectest.Bob, "system_role": "authorization_admin"}))
-	waitForView(t, w, sectest.Bob)
-	unit := submitChange(t, w, sectest.Alice, unitReq("st2", root, "stale", seg, []string{"demo.order.read"}), 202)
+	// Bob is the second authorization admin; a unit under the root with an admin holding in it, and four ordinary
+	// grants. The member's own view renews fully once the identity member answers again: widenings go on after it
+	bobAdmin := map[string]any{"record": bobsAdminHolding(t, admin)}
+	var unit map[string]any
+	require.Eventually(t, func() bool {
+		var code int
+		code, unit = call(t, w, sectest.Alice, "POST", "/api/authz/changes", unitReq("st2", root, "stale", seg, []string{"demo.order.read"}))
+		return code == 202
+	}, 15*time.Second, 200*time.Millisecond, "a widening once the source answers: %v", unit)
 	confirmed := func(record any) {
 		t.Helper()
 		confirmBy(sectest.Bob, record, "")
@@ -63,33 +98,33 @@ func (e *e2e) staleTightening() {
 	confirmed(unit["record"])
 	sub := submitChange(t, w, sectest.Alice, unitReq("st2s", unit["record"], "stale-sub", seg, []string{"demo.order.read"}), 202)
 	confirmed(sub["record"])
-	carolAdmin := submitChange(t, w, sectest.Alice, widenReq("st3", "management_holding",
-		map[string]any{"unit": sub["record"], "holder": carol, "system_role": "authorization_admin"}), 202)
-	confirmed(carolAdmin["record"])
+	graceAdmin := submitChange(t, w, sectest.Alice, widenReq("st3", "management_holding",
+		map[string]any{"unit": sub["record"], "holder": grace, "system_role": "authorization_admin"}), 202)
+	confirmed(graceAdmin["record"])
 	var g [4]map[string]any
 	for i := range g {
-		g[i] = submitChange(t, w, sectest.Alice, grantReq("st-g"+itoa64(int64(i)), root, carol, seg), 200)
+		g[i] = submitChange(t, w, sectest.Alice, grantReq("st-g"+itoa64(int64(i)), root, grace, seg), 200)
 	}
 	// Bob confirms ending the sub-unit while the source answers: attached later, he must be proven then (row 22)
 	subByBob := confirmBy(sectest.Bob, sub["record"], "1")
 
-	// a confirmation needs the operation of what it confirms: Dave, an authorization admin who may read and tighten
+	// a confirmation needs the operation of what it confirms: Heidi, an authorization admin who may read and tighten
 	// records but not change them, confirms a tightening, not a saved widening
-	daveAdmin := submitChange(t, w, sectest.Alice, widenReq("st3d", "management_holding",
-		map[string]any{"unit": root, "holder": dave, "system_role": "authorization_admin"}), 202)
-	confirmed(daveAdmin["record"])
-	daveSegs := []sdkauthz.Segment{}
+	heidiAdmin := submitChange(t, w, sectest.Alice, widenReq("st3d", "management_holding",
+		map[string]any{"unit": root, "holder": heidi, "system_role": "authorization_admin"}), 202)
+	confirmed(heidiAdmin["record"])
+	heidiSegs := []sdkauthz.Segment{}
 	for _, op := range []string{OpRead, OpTighten} {
-		daveSegs = append(daveSegs, sdkauthz.Segment{ResourceType: Records, Operation: op,
+		heidiSegs = append(heidiSegs, sdkauthz.Segment{ResourceType: Records, Operation: op,
 			Atoms: map[string]sdkauthz.Atom{Holder: {Kind: "all"}}, ReadFields: []string{"id"},
 			Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}})
 	}
-	daveGrant := submitChange(t, w, sectest.Alice, grantReq("st3g", root, dave, daveSegs), 200)
-	waitForView(t, w, dave)
+	heidiGrant := submitChange(t, w, sectest.Alice, grantReq("st3g", root, heidi, heidiSegs), 200)
+	waitForView(t, w, heidi)
 	pending := submitChange(t, w, sectest.Alice, unitReq("st3p", root, "pending", seg, []string{"demo.order.read"}), 202)
-	code, out := call(t, w, dave, "POST", "/api/authz/confirmations", map[string]any{"target": pending["record"]})
+	code, out := call(t, w, heidi, "POST", "/api/authz/confirmations", map[string]any{"target": pending["record"]})
 	require.Contains(t, []int{403, 404}, code, "a saved widening's confirmation is a change: %v", out)
-	confirmBy(dave, g[3]["record"], "1")
+	confirmBy(heidi, g[3]["record"], "1")
 
 	// a tightening has its own operation and route: the changes refuse it
 	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/changes", tightenReq("st4", g[0]["record"]))
@@ -127,6 +162,14 @@ func (e *e2e) staleTightening() {
 		assert.Equal(t, "ADMIN_AVAILABILITY_UNPROVABLE", out["reason"])
 		assert.Equal(t, "active", recordOf(t, admin, target).State)
 	}
+	// a confirmer whose eligibility cannot be proven now rejects a pending widening: processing, nothing changes
+	// (CP104, row 9)
+	code, out = callAs(t, bearer(w, sectest.Bob), "POST", "/api/authz/tightenings", map[string]any{"change_key": "st6r",
+		"direction": "tighten", "termination": "reject", "target": pending["record"],
+		"expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}})
+	require.Equal(t, 202, code, "%v", out)
+	assert.Equal(t, "ADMIN_AVAILABILITY_UNPROVABLE", out["reason"])
+	assert.Equal(t, "awaiting_confirmation", recordOf(t, admin, pending["record"]).State)
 	code, out = revoke("st6c", sub["record"], subByBob["id"])
 	require.Equal(t, 202, code, "%v", out)
 	assert.Equal(t, "ADMIN_AVAILABILITY_UNPROVABLE", out["reason"], "its confirmer not proven now either (row 22)")
@@ -164,22 +207,27 @@ func (e *e2e) staleTightening() {
 	_, basis = auditOf(g[3]["record"])
 	assert.Empty(t, basis)
 
-	// what this phase made goes away: the pending unit, Dave's grant, the other admins' holdings (protected tightenings,
-	// the owner confirms), the units
+	// what this phase made goes away: the pending unit, Heidi's grant; Grace and Heidi give up their admin holdings
+	// themselves (the cooling-off phase counts them as admins who became unavailable, not by Alice); the units. Bob
+	// stays an admin
 	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "st10p", "direction": "tighten", "termination": "withdraw",
 		"target": pending["record"], "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}, 200)
-	submitChange(t, w, sectest.Alice, tightenReq("st10g", daveGrant["record"]), 200)
-	for _, target := range []any{daveAdmin["record"], carolAdmin["record"], bobAdmin["record"]} {
-		byOwner := ownerConfirm(t, w, sectest.Alice, target, "1")
-		code, out = revoke("st10-"+target.(string), target, byOwner["id"])
-		require.Equal(t, 200, code, "%v", out)
+	submitChange(t, w, sectest.Alice, tightenReq("st10g", heidiGrant["record"]), 200)
+	for _, h := range []struct {
+		who    string
+		record any
+	}{{grace, graceAdmin["record"]}, {heidi, heidiAdmin["record"]}} {
+		require.Eventually(t, func() bool {
+			code, out = call(t, w, h.who, "POST", "/api/authz/relinquishments", tightenReq("st10-"+h.who, h.record))
+			return code == 200
+		}, 10*time.Second, 200*time.Millisecond, "%v", out)
 	}
 	submitChange(t, w, sectest.Alice, tightenReq("st11s", sub["record"]), 200)
 	submitChange(t, w, sectest.Alice, tightenReq("st11", unit["record"]), 200)
 	// the member's own view renews for high-risk operations at its next verification: widenings go on after it
 	var again map[string]any
 	require.Eventually(t, func() bool {
-		code, again = call(t, w, sectest.Alice, "POST", "/api/authz/changes", grantReq("st12", root, carol, seg))
+		code, again = call(t, w, sectest.Alice, "POST", "/api/authz/changes", grantReq("st12", root, grace, seg))
 		return code == 200
 	}, 10*time.Second, 200*time.Millisecond, "a widening once the source answers: %v", again)
 	submitChange(t, w, sectest.Alice, tightenReq("st13", again["record"]), 200)

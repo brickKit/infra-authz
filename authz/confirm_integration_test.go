@@ -136,6 +136,13 @@ func testProtected(t *testing.T, w *sectest.World, admin *pgx.Conn, root string)
 	require.Equal(t, 201, code, "%v", out)
 	require.Eventually(t, func() bool { return recordOf(t, admin, u["record"]).State == "active" }, 10*time.Second, 50*time.Millisecond,
 		"confirmed by Bob: applied by the job")
+	// the same key again answers the record as it stands now: applied by the job (CP61), not "awaiting confirmation"
+	again := submitChange(t, w, sectest.Alice, unitReq("pr2", root, "protected", scope, ops), 200)
+	assert.Equal(t, "applied", again["outcome"])
+	assert.Equal(t, u["record"], again["record"])
+	code, out = call(t, w, sectest.Alice, "GET", "/api/authz/changes/pr2", nil)
+	require.Equal(t, 200, code, "%v", out)
+	assert.Equal(t, "applied", out["outcome"], "so does the query by key")
 
 	// confirmed, effective later: scheduled, then applied when due
 	later := widenReq("pr3", "management_holding", map[string]any{"unit": u["record"], "holder": carol})
@@ -156,6 +163,9 @@ func testProtected(t *testing.T, w *sectest.World, admin *pgx.Conn, root string)
 	submitChange(t, w, sectest.Bob, map[string]any{"change_key": "pr5", "direction": "tighten", "termination": "reject",
 		"target": r["record"], "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}, 200)
 	assert.Equal(t, "rejected", recordOf(t, admin, r["record"]).EndReason)
+	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/changes", unitReq("pr4", root, "rejected", scope, ops))
+	require.Equal(t, 409, code, "a request whose record ended before it took effect: %v", out)
+	assert.Equal(t, "CHANGE_REVISION_STALE", out["reason"])
 
 	// a signature that does not verify is no confirmation; nor does one stretch how long a confirmation holds
 	p := submitChange(t, w, sectest.Alice, unitReq("pr6", root, "forged", scope, ops), 202)
@@ -187,4 +197,9 @@ func testProtected(t *testing.T, w *sectest.World, admin *pgx.Conn, root string)
 		submitChange(t, w, sectest.Alice, map[string]any{"change_key": "pr9", "direction": "tighten", "termination": "cancel",
 			"target": id, "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}, 200)
 	}
+	// Bob is an authorization admin again for the phases after: the object of a widening is never one of the "others"
+	// the owner's key stands in for, so his own holding needs no one else
+	protect(t, w, sectest.Alice, widenReq("pr11", "management_holding",
+		map[string]any{"unit": root, "holder": sectest.Bob, "system_role": "authorization_admin"}))
+	waitForView(t, w, sectest.Bob)
 }

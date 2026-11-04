@@ -14,11 +14,9 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -31,8 +29,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 )
 
 const (
@@ -93,8 +89,9 @@ func TestMemberEndToEnd(t *testing.T) {
 	testUncomputable(t, e.w, e.admin, e.root, e.segmentsOf)
 	testRelinquish(t, e.w, e.admin, e.root)
 	testConfirmations(t, e.w, e.admin, e.root)
-	e.staleTightening()
 	e.identity()
+	e.staleTightening()
+	e.coolingOff()
 	e.audited()
 }
 
@@ -416,233 +413,10 @@ func (e *e2e) lifecycle() {
 	e.subjects = ans.Shards[0].View.Subjects // the last view seen; "unchanged" answers carry none
 }
 
-// identity is T3: the identity member's account status in the views, stale tokens, the source going quiet.
-func (e *e2e) identity() {
-	t, w, admin, ctx, verify, held, root, eastID := e.t, e.w, e.admin, e.ctx, e.verify, e.held, e.root, e.east
-	iam, stopIAM, pgPassword, busURL := e.iam, e.stopIAM, e.pgPassword, e.busURL
-	defer func() { e.held = held }()
-	var code int
-	var out map[string]any
-	// T3: the identity member's account status reaches the views (security 03's internal sources; P8.25)
-	again4 := submitChange(t, w, sectest.Alice, grantReq("b4", root, carol, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
-	require.NotEmpty(t, again4["record"])
-	carolNow := func(want func(sdkauthz.SubjectEntry) bool) sdkauthz.SubjectEntry {
-		var e sdkauthz.SubjectEntry
-		require.Eventually(t, func() bool {
-			ans := verify(held)
-			if ans.Shards[0].Status == "changed" {
-				held.Digest, e = ans.Shards[0].View.Digest, ans.Shards[0].View.Subjects[carol]
-			}
-			return want(e)
-		}, 10*time.Second, 200*time.Millisecond)
-		return e
-	}
-	entry := carolNow(func(e sdkauthz.SubjectEntry) bool { return len(e.Segments) > 0 })
-	assert.EqualValues(t, 1, entry.SecurityVersion, "the account's security version is in the view")
-	assert.False(t, entry.AccountsDisabled)
-	require.NoError(t, iam.set(ctx, carol, "active", 2)) // a password change at the identity member
-	carolNow(func(e sdkauthz.SubjectEntry) bool { return e.SecurityVersion == 2 })
-	// frozen: no access (the view says so), but nothing ends; an identity-side disposition holds it (T6)
-	require.NoError(t, iam.set(ctx, carol, "security_frozen", 3))
-	entry = carolNow(func(e sdkauthz.SubjectEntry) bool { return e.AccountsDisabled })
-	assert.EqualValues(t, 3, entry.SecurityVersion)
-
-	// disabled: the account ended as a source; the closure job ends what it was a source of (security 08), a grant
-	// and a holding, once its status is applied
-	daves := submitChange(t, w, sectest.Alice, grantReq("dv1", root, dave, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
-	daveHolds := protect(t, w, sectest.Alice, holdingReq("dv2", eastID, dave))
-	eves := submitChange(t, w, sectest.Alice, grantReq("dv3", root, eve, []sdkauthz.Segment{orderSeg(region("east"))}), 200)
-	require.NoError(t, iam.setMarked(ctx, eve, "disabled", "compromised", 2)) // a disposition (T6), not the source's end
-	require.NoError(t, iam.set(ctx, dave, "disabled", 2))
-	require.Eventually(t, func() bool {
-		return recordOf(t, admin, daves["record"]).State == "ended" && recordOf(t, admin, daveHolds["record"]).State == "ended"
-	}, 10*time.Second, 100*time.Millisecond, "the books of a disabled account")
-	assert.Equal(t, "source_ended", recordOf(t, admin, daves["record"]).EndReason)
-	assert.Equal(t, "source_ended", recordOf(t, admin, daveHolds["record"]).EndReason)
-	assert.Equal(t, "active", recordOf(t, admin, again4["record"]).State, "carol is frozen, not disabled: her grant stays")
-	require.Eventually(t, func() bool { // two statuses applied (her first, then disabled): two closures, both done
-		var all, done int
-		_ = admin.QueryRow(ctx, "SELECT count(*), count(*) FILTER (WHERE state = 'done') FROM "+itSchema+
-			".be_work_item WHERE job = $1 AND args->>'ref' = $2", JobClosure, eve).Scan(&all, &done)
-		return all >= 2 && done == all
-	}, 10*time.Second, 100*time.Millisecond, "eve's closures ran")
-	assert.Equal(t, "active", recordOf(t, admin, eves["record"]).State, "disabled as compromised: a disposition, nothing ends")
-
-	// Bob's security change: tokens issued before are stale at the member's own surface; one of the new version passes
-	require.NoError(t, iam.set(ctx, sectest.Bob, "active", 2))
-	require.Eventually(t, func() bool {
-		code, out := callAs(t, "Bearer "+w.TokenAt(sectest.Bob, 1), "GET", "/api/authz/records?type=grant", nil)
-		return code == 401 && out["reason"] == "TOKEN_STALE"
-	}, 10*time.Second, 200*time.Millisecond, "TOKEN_STALE once the member's own view has the new version")
-	code, out = callAs(t, "Bearer "+w.TokenAt(sectest.Bob, 2), "GET", "/api/authz/records?type=grant", nil)
-	assert.Equal(t, 200, code, "%v", out)
-
-	// the identity member goes quiet: past D_src_high (3 s) the views renew for ordinary reads only, past D_src_read
-	// (6 s) they close; once it answers again they renew fully (security 03's renewal and closing, P8.11). A grant
-	// due meanwhile cannot prove its requester (row 9): the job waits, its attempt not counted, and takes effect once
-	// the source answers again (CP41, CP68)
-	waiting := submitChange(t, w, sectest.Alice, scheduledGrant("d5", root, sectest.Bob, []sdkauthz.Segment{orderSeg(region("east"))},
-		4*time.Second), 202)
-	stopIAM()
-	status := func() (string, bool) {
-		ans := verify(held)
-		if ans.Shards[0].Status == "changed" {
-			held.Digest = ans.Shards[0].View.Digest
-		}
-		return ans.Shards[0].Status, ans.Shards[0].ReadOnly
-	}
-	st, ro := status()
-	require.True(t, st != "closed" && !ro, "the precondition: a fresh source renews fully (%s, read-only %v)", st, ro)
-	require.Eventually(t, func() bool { st, ro := status(); return st != "closed" && ro }, 10*time.Second, 200*time.Millisecond,
-		"ordinary reads only")
-	require.Eventually(t, func() bool { st, _ := status(); return st == "closed" }, 10*time.Second, 200*time.Millisecond,
-		"closed")
-	require.Eventually(t, func() bool {
-		d := dueItemOf(t, admin, waiting["record"])
-		return d.State == "retry_wait" && d.Attempts == 0 && strings.Contains(d.LastError, "ADMIN_AVAILABILITY_UNPROVABLE")
-	}, 5*time.Second, 50*time.Millisecond, "due while the source is quiet: processing, a wait that spends no attempt")
-	assert.Equal(t, "scheduled", recordOf(t, admin, waiting["record"]).State, "no access while it waits")
-	// a user's widening meanwhile (CP37): the requester cannot be proven, so it is retried later, nothing applied,
-	// the key not bound. Which answer depends on time: the effect point's processing (row 9, 202) while the member's
-	// own view still admits high-risk operations, or admission's AUTHORIZATION_VIEW_EXPIRED (503) once it does not
-	// (security 03: high-risk validity runs from the last full renewal)
-	cp37 := grantReq("cp37", root, sectest.Bob, []sdkauthz.Segment{orderSeg(region("west"))})
-	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/changes", cp37)
-	assert.True(t, code == 202 && out["outcome"] == "processing" && out["reason"] == "ADMIN_AVAILABILITY_UNPROVABLE" ||
-		code == 503 && out["reason"] == "AUTHORIZATION_VIEW_EXPIRED", "%d %v", code, out)
-	var bound int
-	require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".authz_change WHERE requested_by = $1 AND change_key = 'cp37'",
-		sectest.Alice).Scan(&bound))
-	assert.Zero(t, bound, "nothing binds the key: submit again with the same key")
-	assert.Empty(t, derivedBinding(t, admin, waiting["record"], 1, triggerScheduled), "processing binds nothing")
-	_, stopIAM = startIAM(t, w, pgPassword, busURL, false)
-	require.Eventually(t, func() bool { st, ro := status(); return st != "closed" && !ro }, 15*time.Second, 200*time.Millisecond,
-		"renewed fully again")
-	require.Eventually(t, func() bool { return recordOf(t, admin, waiting["record"]).State == "active" }, 10*time.Second,
-		100*time.Millisecond, "the source answers again: the waiting job takes effect")
-	assert.Equal(t, "applied", derivedBinding(t, admin, waiting["record"], 1, triggerScheduled))
-	require.Eventually(t, func() bool { // the member's own view renews fully at its next verification
-		code, out := call(t, w, sectest.Alice, "POST", "/api/authz/changes", cp37)
-		return code == 200 && out["outcome"] == "applied"
-	}, 10*time.Second, 200*time.Millisecond, "the same key, once the source answers")
-	stopIAM()
-
-}
-
 // audited: every applied change was audited in its transaction.
 func (e *e2e) audited() {
 	t, admin, ctx := e.t, e.admin, e.ctx
 	var audited int
 	require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_audit_log WHERE category = 'security_change'").Scan(&audited))
 	assert.GreaterOrEqual(t, audited, 6, "install claim, unit, holding, two grants, revocation")
-}
-
-func dial(t *testing.T, w *sectest.World, component string) *grpc.ClientConn {
-	tls := w.TLS(t, component)
-	conn, err := grpc.NewClient(itSystem, grpc.WithTransportCredentials(credentials.NewTLS(tls.ClientConfig(ID))))
-	require.NoError(t, err)
-	t.Cleanup(func() { conn.Close() })
-	return conn
-}
-
-func call(t *testing.T, w *sectest.World, who, method, path string, body any) (int, map[string]any) {
-	return callAs(t, w.Bearer(who), method, path, body)
-}
-
-func callAs(t *testing.T, bearer, method, path string, body any) (int, map[string]any) {
-	var r io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		r = bytes.NewReader(b)
-	}
-	req, _ := http.NewRequest(method, itBase+path, r)
-	req.Header.Set("Authorization", bearer)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	var out map[string]any
-	b, _ := io.ReadAll(resp.Body)
-	_ = json.Unmarshal(b, &out)
-	if out == nil {
-		out = map[string]any{"raw": string(b)}
-	}
-	return resp.StatusCode, out
-}
-
-// changePath is where a change request goes: a tightening to its own route (infra.authz.security_record.tighten),
-// everything else to the changes.
-func changePath(body map[string]any) string {
-	if body["direction"] == Tighten {
-		return "/api/authz/tightenings"
-	}
-	return "/api/authz/changes"
-}
-
-func submitChange(t *testing.T, w *sectest.World, who string, body map[string]any, want int) map[string]any {
-	t.Helper()
-	code, out := call(t, w, who, "POST", changePath(body), body)
-	require.Equal(t, want, code, "%v: %v", body["change_key"], out)
-	return out
-}
-
-func listRecords(t *testing.T, w *sectest.World, who, typ string) []map[string]any {
-	t.Helper()
-	code, out := call(t, w, who, "GET", "/api/authz/records?type="+typ, nil)
-	require.Equal(t, 200, code, "%v", out)
-	var list []map[string]any
-	for _, r := range out["records"].([]any) {
-		list = append(list, r.(map[string]any))
-	}
-	return list
-}
-
-// waitForView waits until a principal's new grant on the member's own records is in the member's own view (it
-// verifies every 2.5 s): the units are seen through such a grant only (a holder sees its own records, D82; a unit
-// is nobody's).
-func waitForView(t *testing.T, w *sectest.World, who string) {
-	require.Eventually(t, func() bool {
-		code, out := call(t, w, who, "GET", "/api/authz/records?type=management_unit", nil)
-		recs, _ := out["records"].([]any)
-		return code == 200 && len(recs) > 0
-	}, 10*time.Second, 200*time.Millisecond)
-}
-
-// portFree fails at once when a port the member needs is taken: a running cell (host ports 18xxx) or another member
-// would answer in its place, and the test would assert against another process.
-func portFree(t *testing.T, addrs ...string) {
-	for _, a := range addrs {
-		if !strings.Contains(a, ":") {
-			a = "localhost:" + a
-		}
-		ln, err := net.Listen("tcp", a)
-		require.NoError(t, err, "port %s is taken: is a cell or another member running?", a)
-		_ = ln.Close()
-	}
-}
-
-// grantReq, unitReq and holdingReq are widenings with their candidate (09a's be.security.change_request); tightenReq
-// ends its target.
-func widenReq(key, recordType string, candidate map[string]any) map[string]any {
-	candidate["record_type"] = recordType
-	raw, _ := json.Marshal(candidate)
-	return map[string]any{"change_key": key, "direction": "widen", "candidate": json.RawMessage(raw),
-		"candidate_digest": candidateDigest(recordType, raw)}
-}
-
-func grantReq(key string, unit, grantee any, segs []sdkauthz.Segment) map[string]any {
-	return widenReq(key, "grant", map[string]any{"governance_unit": unit, "grantee": grantee, "segments": segs})
-}
-
-func unitReq(key string, parent any, name string, scope []sdkauthz.Segment, ops []string) map[string]any {
-	return widenReq(key, "management_unit", map[string]any{"parent": parent, "name": name, "managed_scope": scope,
-		"grantable_operations": ops})
-}
-
-func holdingReq(key string, unit any, holder string) map[string]any {
-	return widenReq(key, "management_holding", map[string]any{"unit": unit, "holder": holder})
-}
-
-func tightenReq(key string, target any) map[string]any {
-	return map[string]any{"change_key": key, "direction": "tighten", "target": target}
 }

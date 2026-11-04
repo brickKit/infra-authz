@@ -264,19 +264,23 @@ func (m *Module) changeByKey(c *httpx.Context) error {
 		return err
 	}
 	key := c.Param("key")
-	var bound []byte
+	res := changeResult{ChangeKey: key, Outcome: "unbound"}
 	err = m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
-		return tx.QueryRow(ctx, "SELECT result FROM authz_change WHERE requested_by = $1 AND change_key = $2",
+		var bound []byte
+		err := tx.QueryRow(ctx, "SELECT result FROM authz_change WHERE requested_by = $1 AND change_key = $2",
 			u.Subject, key).Scan(&bound)
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return c.JSON(200, changeResult{ChangeKey: key, Outcome: "unbound"})
-	}
-	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err == nil {
+			err = json.Unmarshal(bound, &res)
+		}
+		if err == nil {
+			res, err = current(ctx, tx, res)
+		}
 		return err
-	}
-	var res changeResult
-	if err := json.Unmarshal(bound, &res); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 	return c.JSON(200, res)
