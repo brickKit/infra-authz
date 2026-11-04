@@ -40,7 +40,10 @@ func TestContainmentRules(t *testing.T) {
 		{"beyond the set", in("w1", "w3"), in("w1", "w2"), false},
 		{"self within a set holding the grantee", sdkauthz.Atom{Kind: "self"}, in(grantee), true},
 		{"self within a set without the grantee", sdkauthz.Atom{Kind: "self"}, in("someone-else"), false},
-		{"self within self is unprovable", sdkauthz.Atom{Kind: "self"}, sdkauthz.Atom{Kind: "self"}, false},
+		// a limit's self is the same grantee's too (security 07: self is instantiated before any comparison)
+		{"self within self", sdkauthz.Atom{Kind: "self"}, sdkauthz.Atom{Kind: "self"}, true},
+		{"the grantee alone within self", in(grantee), sdkauthz.Atom{Kind: "self"}, true},
+		{"another person within self", in(grantee, "someone-else"), sdkauthz.Atom{Kind: "self"}, false},
 		{"node under a subtree", tree(exact("le1/d1/d2")), tree(sub("le1/d1")), true},
 		{"subtree under a subtree", tree(sub("le1/d1/d2")), tree(sub("le1/d1")), true},
 		{"a sibling with a shared prefix", tree(sub("le1/d10")), tree(sub("le1/d1")), false},
@@ -56,6 +59,20 @@ func TestContainmentRules(t *testing.T) {
 	for _, c := range cases {
 		got := contained(seg(map[string]sdkauthz.Atom{"d": c.cand}), seg(map[string]sdkauthz.Atom{"d": c.lim}), grantee)
 		assert.Equal(t, c.contained, got == nil, "%s: %v", c.name, got)
+	}
+	// with no grantee (a unit's scope within its parent's) self stands for whoever is granted later: only another
+	// self contains it, and it contains no named person (security 04's AM04: never by the words alone)
+	for _, c := range []struct {
+		name      string
+		cand, lim sdkauthz.Atom
+		contained bool
+	}{
+		{"self within self", sdkauthz.Atom{Kind: "self"}, sdkauthz.Atom{Kind: "self"}, true},
+		{"self within a set", sdkauthz.Atom{Kind: "self"}, in(grantee), false},
+		{"a set within self", in(grantee), sdkauthz.Atom{Kind: "self"}, false},
+	} {
+		got := contained(seg(map[string]sdkauthz.Atom{"d": c.cand}), seg(map[string]sdkauthz.Atom{"d": c.lim}), "")
+		assert.Equal(t, c.contained, got == nil, "no grantee, %s: %v", c.name, got)
 	}
 	// fields, operation and validity
 	lim := seg(map[string]sdkauthz.Atom{}, "id", "total")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/ids"
@@ -22,7 +23,7 @@ func (m *Module) enact(ctx context.Context, tx db.Tx, e entry, p plan, v verdict
 		res.Outcome = voided
 		return res, nil
 	case outRejected:
-		res.Outcome, res.Detail = "rejected", "row "+strconv.Itoa(v.Row)
+		res.Outcome, res.Detail = "rejected", "row "+strconv.Itoa(v.Row)+p.whyFor(v.Row)
 		switch {
 		case p.restore: // a restore rejected: the record stays held (an operator's to look at)
 			res.Record = p.target.ID
@@ -47,8 +48,11 @@ func (m *Module) enact(ctx context.Context, tx db.Tx, e entry, p plan, v verdict
 	case outAwaitingUnsaved:
 		res.Outcome = "awaiting_confirmation"
 		return res, nil
-	case outKeptHeld:
-		res.Outcome = "held_kept"
+	case outKeptHeld: // not bound: a later closure tries again; an excess is the operators' to see
+		res.Outcome, res.Detail = "held_kept", strings.TrimPrefix(p.whyFor(v.Row), ": ")
+		if res.Detail != "" {
+			m.rt.Logger.Warn("a held record's restore is over a budget; it stays held", "record", p.target.ID, "detail", res.Detail)
+		}
 		return res, nil
 	case outScheduled:
 		if p.activate && e.job.Trigger == triggerConfirmed { // confirmed, effective later: scheduled, its own job registered

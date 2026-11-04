@@ -30,7 +30,8 @@ func (e *e2e) pending() {
 	last := unitNamed(t, admin, "last")
 	var hers string
 	require.NoError(t, admin.QueryRow(e.ctx, "SELECT id::text FROM "+itSchema+`.authz_record WHERE state = 'active'
-		AND record_type = 'management_holding' AND body->>'holder' = $1`, sectest.Alice).Scan(&hers))
+		AND record_type = 'management_holding' AND body->>'holder' = $1 AND body->>'system_role' = 'authorization_admin'`,
+		sectest.Alice).Scan(&hers)) // her admin holding: she holds plain ones too
 	code, out := call(t, w, sectest.Alice, "POST", "/api/authz/dispositions", map[string]any{"change_key": "pe1",
 		"subject": sectest.Alice, "domain": last, "suspended_segments": []sdkauthz.Segment{orderSeg(region("east"))}})
 	require.Equal(t, 200, code, "a disposition is never held back by the last admin: %v", out)

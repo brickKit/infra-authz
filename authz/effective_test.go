@@ -150,6 +150,28 @@ func TestUnitLimitsChainToTheRoot(t *testing.T) {
 	assert.Nil(t, l.of("stray").cut(grant, ""))
 }
 
+// A unit's limit for one grantee: self in a scope is that grantee, so it meets a parent's named set only for a
+// person in it (security 07, "主体相对的原子"); without a grantee it meets nothing but another self.
+func TestUnitLimitsForAGrantee(t *testing.T) {
+	ops := []string{"demo.order.read"}
+	self := sdkauthz.Atom{Kind: "self"}
+	units := map[string]unitBody{
+		"root":   {Root: true},
+		"named":  {Parent: "root", ManagedScope: []sdkauthz.Segment{oseg("demo.order.read", vals(grantee), []string{"id"}, jan, "")}, GrantableOperations: ops},
+		"own":    {Parent: "named", ManagedScope: []sdkauthz.Segment{oseg("demo.order.read", self, []string{"id"}, jan, "")}, GrantableOperations: ops},
+		"selves": {Parent: "root", ManagedScope: []sdkauthz.Segment{oseg("demo.order.read", self, []string{"id"}, jan, "")}, GrantableOperations: ops},
+		"mine":   {Parent: "selves", ManagedScope: []sdkauthz.Segment{oseg("demo.order.read", self, []string{"id"}, jan, "")}, GrantableOperations: ops},
+	}
+	l := newLimits(units)
+	require.Len(t, l.ofFor("own", grantee).segs, 1, "self ∩ {the grantee}")
+	assert.Empty(t, l.ofFor("own", "someone-else").segs, "self ∩ {the grantee} for another person: nothing")
+	assert.Empty(t, l.of("own").segs, "no grantee: self does not meet a named set")
+	require.Len(t, l.of("mine").segs, 1, "self ∩ self, whoever is granted")
+	grant := []sdkauthz.Segment{oseg("demo.order.read", self, []string{"id"}, jan, "")}
+	assert.Len(t, l.ofFor("own", grantee).cut(grant, grantee), 1)
+	assert.Empty(t, l.ofFor("own", "someone-else").cut(grant, "someone-else"))
+}
+
 func all() sdkauthz.Atom { return sdkauthz.Atom{Kind: "all"} }
 
 func TestRetiredPermissionKeys(t *testing.T) {

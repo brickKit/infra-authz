@@ -175,7 +175,7 @@ func (m *Module) disposing(ctx context.Context, tx db.Tx, e entry, s standing, f
 		return false, invalid("a disposition suspends segments, or the person's every segment (all_scope)"), nil
 	}
 	if !in.All {
-		why, err := m.contains(ctx, tx, in.SuspendedSegments, lim)
+		why, err := m.contains(ctx, tx, in.SuspendedSegments, s.limits.ofFor(domain, in.Subject), in.Subject)
 		if err != nil {
 			var rej *changeResult
 			if errors.As(err, &rej) {

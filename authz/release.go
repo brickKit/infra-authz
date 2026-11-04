@@ -172,13 +172,22 @@ func restorable(t *target, lims *limits) bool {
 		if json.Unmarshal(t.Body, &b) != nil {
 			return false
 		}
-		lim := lims.of(b.GovernanceUnit)
+		lim := lims.ofFor(b.GovernanceUnit, b.Grantee)
 		return lim != nil && (b.RoleRevision != "" || len(lim.cut(b.Segments, b.Grantee)) > 0)
 	case "management_holding":
 		var h holdingBody
 		return json.Unmarshal(t.Body, &h) == nil && lims.of(h.Unit) != nil
 	}
 	return true
+}
+
+// releasedOverBudget: a grant coming back from a disposition would be over a budget with what its grantee holds now.
+func releasedOverBudget(ctx context.Context, tx db.Tx, t *target) (string, error) {
+	var b grantBody
+	if t.Type != "grant" || json.Unmarshal(t.Body, &b) != nil {
+		return "", nil
+	}
+	return grantOverBudget(ctx, tx, b) // it is held until it comes back: it does not count against itself
 }
 
 // dispositionConfirmations judges the confirmations a release of an admin's disposition carries (rows 21-24): each
@@ -333,11 +342,17 @@ func (m *Module) releaseDisposition(ctx context.Context, tx db.Tx, id string, re
 			r).Scan(&renewed); err != nil {
 			return err
 		}
+		over, err := releasedOverBudget(ctx, tx, t)
+		if err != nil {
+			return err
+		}
 		state, endReason, holdReason := "active", "", ""
 		switch {
 		case renewed:
 			state, endReason = "ended", "superseded"
-		case !restorable(t, lims):
+		case !restorable(t, lims) || over != "":
+			// nothing left within its limits, or over a budget now (it did not count while held: row 26): kept held,
+			// for the closure job's restore to try again
 			state, holdReason = "held", "restore_pending"
 		}
 		if _, err := m.transition(ctx, tx, r, state, endReason, holdReason, change, ""); err != nil {

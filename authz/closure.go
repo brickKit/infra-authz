@@ -258,7 +258,7 @@ func assess(t *target, w sources) booked {
 // assessWithin judges segments within a unit's effective limit: the unit gone, nothing left, not computable, or
 // partly outside (review).
 func assessWithin(w sources, unit string, segs []sdkauthz.Segment, grantee string) booked {
-	lim := w.limits.of(unit)
+	lim := w.limits.ofFor(unit, grantee)
 	switch {
 	case lim == nil:
 		return booked{state: "ended", endReason: "source_ended"}

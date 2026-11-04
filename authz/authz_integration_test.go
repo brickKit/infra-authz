@@ -63,7 +63,8 @@ const registryTSV = "kind\tkey\towner_component\n" +
 	"permission\tinfra.authz.system.claim\tinfra/authz\n" +
 	"resource_type\tdemo.order\tdemo/orders\npermission\tdemo.order.read\tdemo/orders\n" +
 	"resource_type\tdemo.invoice\tdemo/invoices\npermission\tdemo.invoice.read\tdemo/invoices\n" +
-	"permission\tdemo.invoice.export\tdemo/invoices\n"
+	"permission\tdemo.invoice.export\tdemo/invoices\n" +
+	"resource_type\tdemo.entry\tdemo/ledger\npermission\tdemo.entry.read\tdemo/ledger\n"
 
 // invoices submits its definitions late in the test: a grant naming its resource type waits for them (D77).
 var invoices = &sdkauthz.Definitions{Component: "demo/invoices",
@@ -98,6 +99,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	e.coolingOff()
 	e.dispositions()
 	e.releases()
+	e.bounded()
 	e.identitySide()
 	e.lastAdmin()
 	e.pending()

@@ -128,11 +128,17 @@ func contained(c, l sdkauthz.Segment, grantee string) *notContained {
 }
 
 // atomContained answers "" when the candidate atom is within the limit atom, else why not ("unprovable" when the
-// pair is outside the rule table: never passed by dropping the hard part).
+// pair is outside the rule table: never passed by dropping the hard part). Both sides' self is the grantee
+// (security 07: instantiated before any comparison); with no grantee yet (a unit's scope within its parent's) self
+// stands for whoever is granted later, so only another self contains it.
 func atomContained(c, l sdkauthz.Atom, grantee string) string {
 	if l.Kind == "all" {
 		return ""
 	}
+	if c.Kind == "self" && l.Kind == "self" {
+		return ""
+	}
+	c, l = instantiate(c, grantee), instantiate(l, grantee)
 	switch {
 	case c.Kind == "all":
 		return "the candidate is all, the limit is not"
@@ -143,11 +149,8 @@ func atomContained(c, l sdkauthz.Atom, grantee string) string {
 			}
 		}
 		return ""
-	case c.Kind == "self" && l.Kind == "in":
-		if slices.Contains(l.Values, grantee) {
-			return ""
-		}
-		return "the grantee is beyond the limit"
+	case c.Kind == "self" || l.Kind == "self":
+		return "unprovable (self with no grantee to stand for)"
 	case c.Kind == "tree" && l.Kind == "tree":
 		for _, it := range c.Items {
 			if !slices.ContainsFunc(l.Items, func(li sdkauthz.TreeItem) bool { return covers(li, it) }) {
@@ -165,6 +168,14 @@ func atomContained(c, l sdkauthz.Atom, grantee string) string {
 		return ""
 	}
 	return fmt.Sprintf("unprovable (%s within %s)", c.Kind, l.Kind)
+}
+
+// instantiate is a subject-relative atom for the grantee: self is the set of the grantee alone (security 07).
+func instantiate(a sdkauthz.Atom, grantee string) sdkauthz.Atom {
+	if a.Kind == "self" && grantee != "" {
+		return sdkauthz.Atom{Kind: "in", Values: []string{grantee}}
+	}
+	return a
 }
 
 // covers: a subtree covers any node or subtree below it, an exact node only itself (security 07).

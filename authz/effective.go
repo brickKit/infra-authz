@@ -31,14 +31,22 @@ func newLimits(units map[string]unitBody) *limits {
 	return &limits{units: units, memo: map[string]*limit{}}
 }
 
-// of is a unit's effective limit; nil when the unit is not active (nothing is within it) or its chain does not end
-// at the root.
+// of is a unit's effective limit for no one in particular: a self in a scope meets only another self (a unit's
+// scope within its parent's). nil when the unit is not active (nothing is within it) or its chain does not end at
+// the root.
 func (l *limits) of(unit string) *limit {
-	return l.walk(unit, 0)
+	return l.ofFor(unit, "")
 }
 
-func (l *limits) walk(unit string, depth int) *limit {
-	if got, ok := l.memo[unit]; ok {
+// ofFor is a unit's effective limit for one grantee: every self along the chain is that grantee (security 07,
+// "主体相对的原子"), so a scope's self meets a parent's named set when the grantee is in it.
+func (l *limits) ofFor(unit, grantee string) *limit {
+	return l.walk(unit, grantee, 0)
+}
+
+func (l *limits) walk(unit, grantee string, depth int) *limit {
+	key := unit + "\x00" + grantee
+	if got, ok := l.memo[key]; ok {
 		return got
 	}
 	u, ok := l.units[unit]
@@ -48,13 +56,13 @@ func (l *limits) walk(unit string, depth int) *limit {
 	var out *limit
 	if u.Root {
 		out = &limit{all: true}
-	} else if parent := l.walk(u.Parent, depth+1); parent != nil {
-		out = &limit{segs: parent.cut(u.ManagedScope, ""), ops: u.GrantableOperations}
+	} else if parent := l.walk(u.Parent, grantee, depth+1); parent != nil {
+		out = &limit{segs: parent.cut(u.ManagedScope, grantee), ops: u.GrantableOperations}
 		if !parent.all {
 			out.ops = common(u.GrantableOperations, parent.ops)
 		}
 	}
-	l.memo[unit] = out
+	l.memo[key] = out
 	return out
 }
 

@@ -251,7 +251,7 @@ func (m *Module) view(ctx context.Context, tx db.Tx, component string) (raw []by
 		}
 		// the effective segments (security 08): the grant's ∩ its governance unit's current limit, of keys registered,
 		// not retired and still defined by their owner
-		for _, s := range lims.of(b.GovernanceUnit).cut(b.Segments, b.Grantee) {
+		for _, s := range lims.ofFor(b.GovernanceUnit, b.Grantee).cut(b.Segments, b.Grantee) {
 			// a segment that meets a scope an active disposition suspends is left out whole (security 08)
 			if !defs.usable(s, reg) || suspended(disposed[b.Grantee], s, b.Grantee) {
 				continue

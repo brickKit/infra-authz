@@ -117,6 +117,21 @@ type plan struct {
 	// disp: a new security disposition (disposition.go); release: a disposition's release (release.go)
 	disp    *plannedDisposition
 	release *plannedRelease
+	// whyNot: why the candidate is not contained (row 18); whyOver: why it is over a budget (rows 19, 26). The
+	// rejection's detail says which dimension or budget (security 07, "见证与结果")
+	whyNot, whyOver string
+}
+
+// whyFor is the detail a row's rejection adds: which dimension is not contained (row 18), which budget is exceeded
+// (rows 19, 26).
+func (p plan) whyFor(row int) string {
+	switch {
+	case row == 18 && p.whyNot != "":
+		return ": " + p.whyNot
+	case (row == 19 || row == 26) && p.whyOver != "":
+		return ": " + p.whyOver
+	}
+	return ""
 }
 
 // change runs one user change at the effect point.

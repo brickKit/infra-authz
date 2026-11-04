@@ -146,6 +146,11 @@ func (m *Module) submitted(ctx context.Context, tx db.Tx, e entry, s standing, f
 			return false, nil, err
 		}
 	}
+	if b, ok := p.body.(grantBody); ok { // the budgets (security 07): row 19; the predecessor's segments give way
+		if err := m.budgetOf(ctx, tx, b, f, p, c.Predecessor); err != nil {
+			return false, nil, err
+		}
+	}
 	return structural, nil, nil
 }
 
@@ -166,7 +171,7 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 		return false, nil, nil
 	}
 	if e.job.Trigger == triggerRestore {
-		return m.restoring(t, s, f, p)
+		return m.restoring(ctx, tx, t, s, f, p)
 	}
 	p.target, p.activate, p.recType = t, true, t.Type
 	p.from, p.to, p.at, f.Future = t.ValidFrom, t.ValidUntil, t.EffectiveAt, t.Future
@@ -181,6 +186,11 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 	}
 	if t.Predecessor != "" {
 		if err := m.supersedes(ctx, tx, t.Predecessor, true, f, p); err != nil {
+			return false, nil, err
+		}
+	}
+	if b, ok := p.body.(grantBody); ok { // the budgets again, now (row 19): it does not count against itself
+		if err := m.budgetOf(ctx, tx, b, f, p, t.ID, t.Predecessor); err != nil {
 			return false, nil, err
 		}
 	}
@@ -210,7 +220,7 @@ func (m *Module) fired(ctx context.Context, tx db.Tx, e entry, s standing, f *fa
 // restore_uncomputable): its effective segments now decide (row 25 kept held when nothing is left, row 30 effective
 // and to be reviewed when partly outside); the original requester's eligibility and confirmations are not checked
 // again (D36: a grantor stepping down does not undo an effective grant).
-func (m *Module) restoring(t *target, s standing, f *facts, p *plan) (bool, *changeResult, error) {
+func (m *Module) restoring(ctx context.Context, tx db.Tx, t *target, s standing, f *facts, p *plan) (bool, *changeResult, error) {
 	f.Kind, p.target, p.restore, p.recType, f.Eligible = RestoreUncomputable, t, true, t.Type, proven
 	if t.HoldReason != "uncomputable" && t.HoldReason != "restore_pending" { // restore_pending: a release kept it (T6b)
 		f.FromState = false
@@ -222,12 +232,15 @@ func (m *Module) restoring(t *target, s standing, f *facts, p *plan) (bool, *cha
 		var b grantBody
 		_ = json.Unmarshal(t.Body, &b)
 		unit, segs, grantee = b.GovernanceUnit, b.Segments, b.Grantee
+		if err := m.budgetOf(ctx, tx, b, f, p, t.ID); err != nil { // over a budget now: kept held (row 26)
+			return false, nil, err
+		}
 	case "management_unit":
 		var b unitBody
 		_ = json.Unmarshal(t.Body, &b)
 		unit, segs, f.ManagementWiden = b.Parent, b.ManagedScope, true
 	}
-	lim := s.limits.of(unit)
+	lim := s.limits.ofFor(unit, grantee)
 	f.RestoredEmpty = lim == nil || !lim.computable(segs) || !lim.all && len(lim.cut(segs, grantee)) == 0
 	f.PartlyOutside = !lim.covers(segs, grantee)
 	return true, nil, nil
@@ -239,7 +252,8 @@ func (m *Module) restoring(t *target, s standing, f *facts, p *plan) (bool, *cha
 func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType string, raw json.RawMessage, stored bool,
 	s standing, f *facts, p *plan) (structural bool, bad string, pre *changeResult, err error) {
 	var segs []sdkauthz.Segment
-	var lim *limit // the limit the segments must be within
+	var lim *limit     // the limit the segments must be within
+	var grantee string // a grant's: self is them (security 07); none for a unit's scope
 	switch recType {
 	case "management_unit":
 		var b unitBody
@@ -255,7 +269,7 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 		f.NeedsConfirmation = true // a protected operation: a new or enlarged management unit (security 08)
 		for _, op := range b.GrantableOperations {
 			if lim == nil || !lim.all && !slices.Contains(lim.ops, op) {
-				f.Contained = false
+				f.Contained, p.whyNot = false, "operation "+op+" is not grantable in the parent unit"
 			}
 		}
 	case "management_holding":
@@ -289,12 +303,13 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 			return false, "a grant needs a grantee and segments or a role revision", nil, nil
 		}
 		b.IssuedBy = requester
-		structural, p.body, lim, segs = s.manages(b.GovernanceUnit), b, s.limits.of(b.GovernanceUnit), b.Segments
+		structural, p.body, segs, grantee = s.manages(b.GovernanceUnit), b, b.Segments, b.Grantee
+		lim = s.limits.ofFor(b.GovernanceUnit, grantee)
 	default:
 		return false, "record type " + recType + " is not in this version", nil, nil
 	}
 	if segs != nil {
-		why, err := m.contains(ctx, tx, segs, lim)
+		why, err := m.contains(ctx, tx, segs, lim, grantee)
 		var rej *changeResult
 		switch {
 		case errors.As(err, &rej):
@@ -302,7 +317,7 @@ func (m *Module) widening(ctx context.Context, tx db.Tx, requester, recType stri
 		case err != nil:
 			return false, "", nil, err
 		case why != "":
-			f.Contained = false
+			f.Contained, p.whyNot = false, why
 		}
 	}
 	return structural, "", nil, nil
@@ -455,8 +470,8 @@ func (m *Module) onTarget(ctx context.Context, tx db.Tx, e entry, s standing, f 
 
 // contains proves the segments within the unit's limit; why is the first failure. Definitions not there come back as
 // a *changeResult error: retryable when the owner's definitions are on their way, final when nobody owns the type.
-func (m *Module) contains(ctx context.Context, tx db.Tx, segs []sdkauthz.Segment, lim *limit) (string, error) {
-	err := m.within(ctx, tx, segs, lim, "")
+func (m *Module) contains(ctx context.Context, tx db.Tx, segs []sdkauthz.Segment, lim *limit, grantee string) (string, error) {
+	err := m.within(ctx, tx, segs, lim, grantee)
 	var rej *errRejected
 	switch {
 	case err == nil:
