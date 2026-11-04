@@ -33,8 +33,11 @@ func adminState(ctx context.Context, tx db.Tx) (string, error) {
 // judgeAdmins judges the deployment's admins again (operational only: the other states are left by a recovery).
 func (m *Module) judgeAdmins(ctx context.Context, tx db.Tx) error {
 	st, err := adminState(ctx, tx)
-	if err != nil || st != stateOperational {
+	if err != nil || st == stateRecoveryPending {
 		return err
+	}
+	if st == stateAdminRecovery { // operational again once the restored identity is provably available (T6f)
+		return m.recoveredYet(ctx, tx)
 	}
 	var claimed bool // before the install claim there is no admin to lose
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM authz_record WHERE record_type = 'management_holding'
@@ -119,4 +122,32 @@ func (m *Module) adminStateHTTP(c *httpx.Context) error {
 		return err
 	}
 	return c.JSON(200, out)
+}
+
+// recoveredYet ends an administrator recovery when the identity it restored holds an active admin holding and the
+// identity source proves its account active now; otherwise it stays in administrator recovery (CP74).
+func (m *Module) recoveredYet(ctx context.Context, tx db.Tx) error {
+	var identity *string
+	if err := tx.QueryRow(ctx, "SELECT recovery_identity FROM authz_state").Scan(&identity); err != nil || identity == nil {
+		return err
+	}
+	holdings, err := adminHoldingsOf(ctx, tx, *identity)
+	if err != nil || len(holdings) == 0 {
+		return err
+	}
+	a, err := m.accountOf(ctx, tx, *identity)
+	if err != nil || a.now != proven {
+		if err == nil {
+			m.rt.Logger.Warn("administrator recovery: the restored identity is not available yet", "identity", *identity)
+		}
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE authz_state SET admin_state = 'operational', admin_state_since = now(),
+		entered_from = NULL, recovery_identity = NULL, unavailable_holdings = '[]'`); err != nil {
+		return err
+	}
+	_, err = m.rt.Audit.Write(ctx, tx, audit.Record{Category: audit.SecurityChange, Operation: OpChange,
+		Outcome: audit.Succeeded, Actor: ID, Target: map[string]any{"type": "deployment_admin_state"},
+		Changes: map[string]any{"admin_state": stateOperational, "restored": *identity}})
+	return err
 }

@@ -148,37 +148,7 @@ func (m *Module) release(ctx context.Context, tx db.Tx, e entry, p plan, change 
 				NewRevision: &revisionRef{Domain: dispositionDomain, Value: strconv.FormatInt(r.disp.Revision, 10)}}, nil
 		}
 	}
-	units, err := m.units(ctx, tx)
-	if err != nil {
-		return changeResult{}, err
-	}
-	lims := newLimits(units)
-	for _, id := range r.records {
-		t, err := lockTarget(ctx, tx, id)
-		if err != nil {
-			return changeResult{}, err
-		}
-		var renewed bool
-		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM authz_record WHERE predecessor = $1 AND state = 'active')",
-			id).Scan(&renewed); err != nil {
-			return changeResult{}, err
-		}
-		state, endReason, holdReason := "active", "", ""
-		switch {
-		case renewed:
-			state, endReason = "ended", "superseded"
-		case !restorable(t, lims):
-			state, holdReason = "held", "restore_pending"
-		}
-		if _, err := m.transition(ctx, tx, id, state, endReason, holdReason, change, ""); err != nil {
-			return changeResult{}, err
-		}
-		if _, err := tx.Exec(ctx, "UPDATE authz_record SET disposition = NULL WHERE id = $1 AND state <> 'held'", id); err != nil {
-			return changeResult{}, err
-		}
-	}
-	if _, err := tx.Exec(ctx, `UPDATE authz_disposition SET state = 'released', released_by = $2, updated_at = now()
-		WHERE id = $1`, r.disp.ID, e.requester); err != nil {
+	if err := m.releaseDisposition(ctx, tx, r.disp.ID, r.records, e.requester, change); err != nil {
 		return changeResult{}, err
 	}
 	if err := useConfirmations(ctx, tx, p.confirmed, change); err != nil {
@@ -342,4 +312,42 @@ func (m *Module) releaseHTTP(c *httpx.Context) error {
 		return err
 	}
 	return answer(c, res)
+}
+
+// releaseDisposition brings back what a disposition still holds and releases it: each record effective again, ended
+// superseded when a renewal contains it (CP31), or kept held (restore_pending) when nothing of it is left within its
+// limits (CP66). A release and an administrator recovery's release both do it.
+func (m *Module) releaseDisposition(ctx context.Context, tx db.Tx, id string, records []string, by, change string) error {
+	units, err := m.units(ctx, tx)
+	if err != nil {
+		return err
+	}
+	lims := newLimits(units)
+	for _, r := range records {
+		t, err := lockTarget(ctx, tx, r)
+		if err != nil {
+			return err
+		}
+		var renewed bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM authz_record WHERE predecessor = $1 AND state = 'active')",
+			r).Scan(&renewed); err != nil {
+			return err
+		}
+		state, endReason, holdReason := "active", "", ""
+		switch {
+		case renewed:
+			state, endReason = "ended", "superseded"
+		case !restorable(t, lims):
+			state, holdReason = "held", "restore_pending"
+		}
+		if _, err := m.transition(ctx, tx, r, state, endReason, holdReason, change, ""); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE authz_record SET disposition = NULL WHERE id = $1 AND state <> 'held'", r); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(ctx, `UPDATE authz_disposition SET state = 'released', released_by = $2, updated_at = now()
+		WHERE id = $1`, id, by)
+	return err
 }

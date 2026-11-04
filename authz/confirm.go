@@ -292,14 +292,18 @@ func (m *Module) confirm(ctx context.Context, confirmer string, in confirmIn) (s
 }
 
 // ownerKey is the deployment owner's public key (AUTHZ_OWNER_KEY, PEM); none configured refuses owner confirmations.
-func (m *Module) ownerKey() (ed25519.PublicKey, error) {
-	text := m.rt.Config.Secret("AUTHZ_OWNER_KEY").Value()
+func (m *Module) ownerKey() (ed25519.PublicKey, error) { return m.publicKey("AUTHZ_OWNER_KEY") }
+
+// publicKey reads an Ed25519 public key (PEM, PKIX) from a configuration key: the owner's confirmation key, or the
+// recovery key (A124, A129). Absent: refused.
+func (m *Module) publicKey(name string) (ed25519.PublicKey, error) {
+	text := m.rt.Config.Secret(name).Value()
 	if text == "" {
-		return nil, errs.New(errs.ReasonPermissionDenied, "this deployment has no owner key (AUTHZ_OWNER_KEY)")
+		return nil, errs.New(errs.ReasonPermissionDenied, "this deployment has no such key ("+name+")")
 	}
 	block, _ := pem.Decode([]byte(text))
 	if block == nil {
-		return nil, errors.New("AUTHZ_OWNER_KEY is not PEM")
+		return nil, errors.New(name + " is not PEM")
 	}
 	k, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
@@ -307,7 +311,7 @@ func (m *Module) ownerKey() (ed25519.PublicKey, error) {
 	}
 	key, ok := k.(ed25519.PublicKey)
 	if !ok {
-		return nil, errors.New("AUTHZ_OWNER_KEY is not an Ed25519 public key")
+		return nil, errors.New(name + " is not an Ed25519 public key")
 	}
 	return key, nil
 }

@@ -100,6 +100,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	e.identitySide()
 	e.lastAdmin()
 	e.pending()
+	e.recovery()
 	e.audited()
 }
 
@@ -171,9 +172,10 @@ func startE2E(t *testing.T) *e2e {
 		"PG_OWNER_USER": "postgres", "PG_OWNER_PASSWORD": pgPassword, "AUTHZ_INSTANCE": "authz-it-instance",
 		"AUTHZ_REGISTRY": registryTSV, "AUTHZ_BOOTSTRAP_ADMIN": sectest.Alice, "BUS_URL": busURL,
 		"IAM_GRPC_URL": "http://" + iamSystem, "IAM_COMPONENT": iamID, "AUTHZ_SOURCE_HIGH": "3s", "AUTHZ_SOURCE_READ": "6s",
-		"AUTHZ_T_TIGHT":   itTight.String(),
-		"AUTHZ_OWNER_KEY": ownerPublicPEM(t),
-		"AUTHZ_GRPC_URL":  "http://" + itSystem} { // the member guards its own user surface with its own view
+		"AUTHZ_T_TIGHT":      itTight.String(),
+		"AUTHZ_OWNER_KEY":    ownerPublicPEM(t),
+		"AUTHZ_RECOVERY_KEY": recoveryPublicPEM(t),
+		"AUTHZ_GRPC_URL":     "http://" + itSystem} { // the member guards its own user surface with its own view
 		env[k] = v
 	}
 	var logs bytes.Buffer

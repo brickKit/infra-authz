@@ -127,6 +127,8 @@ func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/dispositions", Operation: OpDispRead, Handle: m.dispositionsHTTP})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/dispositions/:id/release", Operation: OpRelease, Handle: m.releaseHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/admin-state", Operation: OpDispRead, Handle: m.adminStateHTTP})
+	// the administrator recovery: no token (no admin may be left); the recovery key's signature is the credential
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/recovery", Public: true, Handle: m.recoveryHTTP})
 	return nil
 }
 

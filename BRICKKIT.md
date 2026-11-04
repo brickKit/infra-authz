@@ -23,7 +23,7 @@
 
 身份成员冻结一个账号，或把它标为被盗、可疑并停用时，本组件应用这个状态的同时建立一条全局的处置（暂停这个人的全部段，他的生效记录转为暂停）；同一账号再有冻结或标记并入这条处置。身份侧解冻不解除它；解除要由根单元的管理者列出要移除的证据（`signal_refs`，形如 `<账号>@<状态修订>`），全部移除才真正解除。第一次见到就已冻结的账号不算转变。
 
-可证明没有可用的授权管理员时（最后一名被处置、账号被停用等），部署进入待恢复（`GET /api/authz/admin-state`）：新建或扩大管理单元、授出管理持有资格一律答 `RECOVERY_IN_PROGRESS`，普通授予与收紧照常；只能由部署所有者做管理员恢复退出。
+可证明没有可用的授权管理员时（最后一名被处置、账号被停用等），部署进入待恢复（`GET /api/authz/admin-state`）：新建或扩大管理单元、授出管理持有资格一律答 `RECOVERY_IN_PROGRESS`，普通授予与收紧照常；只能由部署所有者做管理员恢复退出：在部署机上用离线的恢复私钥运行 `recover`（`-action replace -holding <持有资格>` 暂停被盗的管理员，`-action restore -identity <主体>` 恢复一名管理员，`-action abort` 中止），请求发到 `POST /api/authz/recovery`，每个请求只能用一次。恢复会推进授权恢复代次，各组件丢弃旧视图。
 
 3.0.20 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
 - 严格路径（A、B 档）；
@@ -70,6 +70,7 @@
 | `AUTHZ_SOURCE_HIGH`、`AUTHZ_SOURCE_READ` | `D_src_high`（起始 1 分钟，至多 5 分钟）与 `D_src_read`（起始 10 分钟，至多 1 小时，不短于前者）；调大即放宽撤权的上界，产品说明随之改写（安全 03） |
 | `AUTHZ_T_TIGHT` | `T_tight`（起始 1 小时）：身份来源停住时，一个人按最后已应用的事实办理收紧的水位年龄上限；超过后要第二人确认（安全 03） |
 | `AUTHZ_OWNER_KEY` | 部署所有者确认的公钥 |
+| `AUTHZ_RECOVERY_KEY` | 管理员恢复的公钥（与上一项不是同一对；没有时不受理恢复） |
 | `BUS_URL`（必填） | 消息系统 |
 | `DEPLOYMENT_ID`、`IAM_ISSUER`、`IAM_JWKS_URL`、`AUTHZ_GRPC_URL`、`SERVICE_TLS_CERT_FILE`、`SERVICE_TLS_KEY_FILE`、`SERVICE_TLS_CA_FILE`（必填） | 受保护的用户面与 mTLS 的系统面要用 |
 | `PG_HOST`、`PG_DATABASE`、`PG_USER`、`PG_PASSWORD`、`PG_SCHEMA`（必填） | 自己的数据库，密码是密钥；迁移另用 `PG_OWNER_USER`、`PG_OWNER_PASSWORD` |

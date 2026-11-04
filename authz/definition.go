@@ -94,6 +94,10 @@ func Keys() []config.Key {
 		// by the owner and signs owner confirmations. Absent: no owner confirmation is accepted. Not secret: a secret
 		// key so that file:// delivers it
 		{Name: "AUTHZ_OWNER_KEY", Type: config.String, Secret: true},
+		// the deployment owner's recovery key (security 08's administrator recovery, A129): an Ed25519 public key (PEM),
+		// another key than AUTHZ_OWNER_KEY; its private key is kept offline and signs recovery requests (cmd/recover).
+		// Absent: no recovery is accepted. Not secret: a secret key so that file:// delivers it
+		{Name: "AUTHZ_RECOVERY_KEY", Type: config.String, Secret: true},
 		// the identity member: its system surface ($endpoint:<member>:grpc) and its component ID (the certificate it
 		// presents, the source's name); config/vars.yaml gives both, changed together when the member is switched
 		{Name: "IAM_GRPC_URL", Type: config.String, Required: true},

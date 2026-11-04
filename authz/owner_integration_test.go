@@ -21,9 +21,20 @@ import (
 // The test deployment's owner key (A124): generated per run, its public key in the member's configuration; and the
 // database connection the helpers read records with.
 var (
-	ownerPriv ed25519.PrivateKey
-	itAdmin   *pgx.Conn
+	recoveryPriv ed25519.PrivateKey
+	ownerPriv    ed25519.PrivateKey
+	itAdmin      *pgx.Conn
 )
+
+// recoveryPublicPEM is the test deployment's recovery key (A129), another pair than the owner's.
+func recoveryPublicPEM(t *testing.T) string {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	recoveryPriv = priv
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+}
 
 func ownerPublicPEM(t *testing.T) string {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
