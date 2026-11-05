@@ -127,7 +127,7 @@ func pageIAM(ctx context.Context, tx db.Tx, after string, limit int) ([]events.R
 
 func iamDefinition(built chan<- *iamModule) component.Definition {
 	none := map[string]sdkauthz.Dimension{}
-	return component.Definition{ID: iamID, Version: "3.0.0", GRPCPort: iamSystemPort,
+	return component.Definition{ID: iamID, Version: "3.0.0", GRPCPort: iamSystemPort, Resend: "test.iam.account.resend",
 		Migrations: fstest.MapFS{"0001_accounts.up.sql": {Data: []byte(
 			"CREATE TABLE accounts (principal text PRIMARY KEY, version bigint NOT NULL, record bytea NOT NULL);")}},
 		Streams: []events.Stream{{Name: AccountStream.Name, Partitions: AccountStream.Partitions,
@@ -138,7 +138,8 @@ func iamDefinition(built chan<- *iamModule) component.Definition {
 				Fields: map[string]sdkauthz.Field{}}},
 			Operations: []sdkauthz.Operation{
 				{Key: "test.iam.account.pull", ResourceType: "test.iam.account", Purpose: "read", RiskClass: "low"},
-				{Key: "test.iam.account.read", ResourceType: "test.iam.account", Purpose: "read", RiskClass: "low"}}},
+				{Key: "test.iam.account.read", ResourceType: "test.iam.account", Purpose: "read", RiskClass: "low"},
+				{Key: "test.iam.account.resend", ResourceType: "test.iam.account", Purpose: "read", RiskClass: "low"}}},
 		New: func(rt *runtime.Runtime) (component.Module, error) {
 			m := &iamModule{rt: rt}
 			built <- m
