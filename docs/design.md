@@ -69,6 +69,8 @@
 
 ## 实现状态
 
+3.0.32（底层先行第 4 项 T10 的级联）：be-sdk-go alpha.92。整套恢复的核对（`CheckService`，操作 `infra.authz.system.recover`，只许恢复工具调用）：SDK 自带的三项检查（授权状态的不变量仍由契约的 `RecoveryService.Check` 做，6.5）；损失范围的“还在不在”：四种记录（`authz_record` 的修订）、安全处置（修订）、批量计划（没有修订，只答在不在）、账号（身份成员的对象，本成员的确认由身份一侧的证据覆盖，一律答在）。本成员的审计 `target` 还不带版本：安全变更都有证据，恢复工具按证据核对，不靠版本。清单的 `RECOVERY_PHASE` 加 `verifying`、`read_only`。
+
 3.0.31（底层先行第 4 项 T9 的级联）：be-sdk-go alpha.87（重放、恢复阶段 `replaying`、转发器停止时放弃租约）；清单的 `RECOVERY_PHASE` 加 `replaying`。
 
 3.0.30（底层先行第 4 项 T9c，A142）：整套恢复的 6.4–6.5（契约 alpha.5 的 `RecoveryService`，操作 `infra.authz.system.replay`，只许 `ops/recover`；`recoverystep.go`）：

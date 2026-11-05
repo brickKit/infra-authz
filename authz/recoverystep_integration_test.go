@@ -3,6 +3,7 @@
 package authz
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/brickKit/be-sdk-go/v3/canon"
 	"github.com/brickKit/be-sdk-go/v3/evidence"
 	"github.com/brickKit/be-sdk-go/v3/ids"
+	"github.com/brickKit/be-sdk-go/v3/recoverypb"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
 	authzv3 "github.com/brickKit/contract-infra-authz/v3/gen/go/be/authz/v3"
 	"github.com/stretchr/testify/assert"
@@ -58,6 +60,26 @@ func TestTheRecoveryStepAfterTheReplay(t *testing.T) {
 	units := listRecords(t, w, sectest.Alice, "management_unit")
 	require.Len(t, units, 1)
 	root := units[0]["id"].(string)
+
+	// chapter 14: the checks and the presence of what this member audits, the recovery tool only
+	cs := recoverypb.NewCheckServiceClient(dial(t, w, RecoveryTool))
+	_, err = recoverypb.NewCheckServiceClient(dial(t, w, "demo/orders")).Check(ctx, &recoverypb.CheckRequest{Recovery: "r"})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "%v", err)
+	checked, err := cs.Check(ctx, &recoverypb.CheckRequest{Recovery: "r"})
+	require.NoError(t, err)
+	assert.NotEmpty(t, checked.GetResults())
+	var unitRev int64
+	require.NoError(t, admin.QueryRow(ctx, "SELECT revision FROM "+itSchema+".authz_record WHERE id = $1", root).Scan(&unitRev))
+	present, err := cs.Present(ctx, &recoverypb.PresentRequest{Recovery: "r", Objects: []*recoverypb.ObjectRef{
+		{Type: "management_unit", Id: root, Version: strconv.FormatInt(unitRev, 10)},
+		{Type: "management_unit", Id: root, Version: strconv.FormatInt(unitRev+1, 10)},
+		{Type: "grant", Id: ids.New().String()}, {Type: "change_plan", Id: ids.New().String()}, {Type: "account", Id: dave}}})
+	require.NoError(t, err)
+	var answers []string
+	for _, a := range present.GetAnswers() {
+		answers = append(answers, a.GetAnswer())
+	}
+	assert.Equal(t, []string{"present", "older", "absent", "absent", "present"}, answers)
 	eveGrant := submitChange(t, w, sectest.Alice, grantReq("rs-g1", root, eve, seg), 200)["record"].(string)
 	bobGrant := submitChange(t, w, sectest.Alice, grantReq("rs-g2", root, sectest.Bob, seg), 200)["record"].(string)
 	require.NoError(t, e.iam.set(ctx, eve, "disabled", 2))
