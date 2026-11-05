@@ -174,7 +174,11 @@ func (m *Module) recoveryReplace(ctx context.Context, tx db.Tx, r RecoveryReques
 		if _, err := tx.Exec(ctx, "UPDATE authz_record SET disposition = $2 WHERE id = $1", id, disp); err != nil {
 			return err
 		}
-		// its unused confirmations are void; the widenings it asked for and not yet effective are cancelled
+		// its unused confirmations are void; the plans it initiated or confirmed leave their pending items for review
+		// (CP76); the widenings it asked for and not yet effective are cancelled
+		if err := reviewReplaced(ctx, tx, h.Holder); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE authz_confirmation SET expires_at = now() WHERE confirmer = $1
 			AND consumed_by_change IS NULL AND expires_at > now()`, h.Holder); err != nil {
 			return err

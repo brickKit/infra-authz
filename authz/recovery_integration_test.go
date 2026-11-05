@@ -86,8 +86,20 @@ func (e *e2e) recovery() {
 	asked := submitChange(t, w, sectest.Alice, unitReq("rc1", root, "asked", []sdkauthz.Segment{orderSeg(region("east"))},
 		[]string{"demo.order.read"}), 202)
 	alices := adminHoldings(sectest.Alice)[0]
+	// a plan of hers still executing (written as it stands between two runs: an item pending): its pending items are
+	// left for review (CP76)
+	_, err := admin.Exec(ctx, "INSERT INTO "+itSchema+`.authz_plan (id, initiator, plan_key, draft_digest, plan_state)
+		VALUES ('01900000-0000-7000-8000-00000000c076', $1, 'rc-plan', 'd', 'executing')`, sectest.Alice)
+	require.NoError(t, err)
+	_, err = admin.Exec(ctx, "INSERT INTO "+itSchema+`.authz_plan_item (plan, item_key, position, request, item_state)
+		VALUES ('01900000-0000-7000-8000-00000000c076', 'p', 0, '{}', 'pending')`)
+	require.NoError(t, err)
 	code, out = recover(RecoveryRequest{Action: "replace", Holdings: []string{alices}}, recoveryPriv)
 	require.Equal(t, 200, code, "%v", out)
+	var itemNow string
+	require.NoError(t, admin.QueryRow(ctx, "SELECT item_state FROM "+itSchema+".authz_plan_item WHERE item_key = 'p'"+
+		" AND plan = '01900000-0000-7000-8000-00000000c076'").Scan(&itemNow))
+	assert.Equal(t, itemNeedsReview, itemNow, "her plan's pending item is to be reviewed")
 	assert.Equal(t, "recovery_pending", out["admin_state"])
 	assert.Equal(t, "held", recordOf(t, admin, alices).State)
 	assert.Equal(t, recordState{State: "ended", EndReason: "cancelled", Revision: 1, StateRev: 2}, withoutReason(recordOf(t, admin, asked["record"])))

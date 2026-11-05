@@ -38,6 +38,8 @@ type Module struct {
 	accounts                *projection.Watermarked
 	srcHigh, srcRead, tight time.Duration
 	maxDepth                int // AUTHZ_MAX_UNIT_DEPTH (A131)
+	planMaxAge              time.Duration
+	planConfirmAbove        int // AUTHZ_PLAN_MAX_AGE, AUTHZ_PLAN_CONFIRM_ABOVE (A132)
 }
 
 // New builds the module from its runtime.
@@ -61,6 +63,10 @@ func New(rt *runtime.Runtime) (*Module, error) {
 	}
 	if m.maxDepth = int(rt.Config.Int("AUTHZ_MAX_UNIT_DEPTH")); m.maxDepth < 1 {
 		return nil, errs.New(errs.ReasonRequestInvalid, fmt.Sprintf("AUTHZ_MAX_UNIT_DEPTH (%d) is 1 or more", m.maxDepth))
+	}
+	m.planMaxAge, m.planConfirmAbove = rt.Config.Duration("AUTHZ_PLAN_MAX_AGE"), int(rt.Config.Int("AUTHZ_PLAN_CONFIRM_ABOVE"))
+	if m.planMaxAge <= 0 || m.planConfirmAbove < 0 {
+		return nil, errs.New(errs.ReasonRequestInvalid, "AUTHZ_PLAN_MAX_AGE is above zero; AUTHZ_PLAN_CONFIRM_ABOVE is 0 or more")
 	}
 	iam := rt.Config.String("IAM_COMPONENT")
 	conn, ok := rt.GRPCAt(iam, rt.Config.String("IAM_GRPC_URL"))
@@ -127,6 +133,13 @@ func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/dispositions", Operation: OpDispRead, Handle: m.dispositionsHTTP})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/dispositions/:id/release", Operation: OpRelease, Handle: m.releaseHTTP})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/admin-state", Operation: OpDispRead, Handle: m.adminStateHTTP})
+	// batch plans (planhttp.go, A132)
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/plans", Operation: OpChange, Handle: m.createPlanHTTP})
+	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/plans/:id", Operation: OpRead, Handle: m.getPlanHTTP})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/plans/:id/preview", Operation: OpChange, Handle: m.previewPlanHTTP})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/plans/:id/confirm", Operation: OpChange, Handle: m.confirmPlanHTTP})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/plans/:id/cancel", Operation: OpChange, Handle: m.cancelPlanHTTP})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/plans/:id/items/:item/review", Operation: OpChange, Handle: m.reviewItemHTTP})
 	// the install claim: whoever presents what the claim names (claim.go); nobody is granted the operation
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/claim", Operation: OpClaim, Handle: m.claimHTTP})
 	// the administrator recovery: no token (no admin may be left); the recovery key's signature is the credential

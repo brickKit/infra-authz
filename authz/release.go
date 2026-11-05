@@ -241,6 +241,40 @@ func (m *Module) dispositionConfirmations(ctx context.Context, tx db.Tx, list []
 	return list, nil
 }
 
+// confirmerBasis checks who confirms an object that is not a record (a disposition's release, a plan): another
+// authorization admin proven now (A123), or the deployment owner's signature over o (A124); until is how long it holds.
+func (m *Module) confirmerBasis(ctx context.Context, tx db.Tx, confirmer string, in confirmIn, o sdkauthz.OwnerConfirmation,
+	until time.Time) (basis, who string, _ time.Time, err error) {
+	switch in.Basis {
+	case "", basisHolding:
+		switch ok, err := m.confirmerEligible(ctx, tx, confirmer, false); {
+		case err != nil:
+			return "", "", until, err
+		case ok == unprovable:
+			return "", "", until, errs.New(errs.ReasonAuthorizationUnprovable, "the confirmer's eligibility cannot be proven now")
+		case ok == disproven:
+			return "", "", until, errs.New(errs.ReasonPermissionDenied, "only another authorization admin confirms (A123)")
+		}
+		return basisHolding, confirmer, until, nil
+	case basisOwner:
+		at, err := time.Parse(time.RFC3339Nano, in.ExpiresAt)
+		if err != nil || !at.After(time.Now()) || at.After(until.Add(time.Minute)) {
+			return "", "", until, errs.New(errs.ReasonRequestInvalid, "expires_at is an instant ahead, no later than a confirmation holds")
+		}
+		o.ExpiresAt = in.ExpiresAt
+		key, err := m.ownerKey()
+		if err != nil {
+			return "", "", until, err
+		}
+		if !o.Verify(key, in.Signature) {
+			return "", "", until, errs.New(errs.ReasonPermissionDenied, "the deployment owner's signature does not verify")
+		}
+		m.rt.Logger.Error("the deployment owner's confirmation was used", "object", o.Target, "submitted_by", confirmer)
+		return basisOwner, ownerName, at, nil
+	}
+	return "", "", until, errs.New(errs.ReasonRequestInvalid, "basis is holding or deployment_owner")
+}
+
 // dispositionBinding is what a confirmation of a release binds, as the owner would sign it: the disposition at its
 // revision, with its expiry from now.
 func (m *Module) dispositionBinding(d *dispositionRow) (sdkauthz.OwnerConfirmation, time.Time) {
@@ -262,34 +296,9 @@ func (m *Module) confirmDisposition(ctx context.Context, tx db.Tx, confirmer str
 		return "", time.Time{}, errs.New(errs.ReasonRequestInvalid, "a release's confirmation names the disposition's revision (expected_revision)")
 	}
 	o, until := m.dispositionBinding(d)
-	basis, who := basisHolding, confirmer
-	switch in.Basis {
-	case "", basisHolding:
-		switch ok, err := m.confirmerEligible(ctx, tx, confirmer, false); {
-		case err != nil:
-			return "", time.Time{}, err
-		case ok == unprovable:
-			return "", time.Time{}, errs.New(errs.ReasonAuthorizationUnprovable, "the confirmer's eligibility cannot be proven now")
-		case ok == disproven:
-			return "", time.Time{}, errs.New(errs.ReasonPermissionDenied, "only another authorization admin confirms (A123)")
-		}
-	case basisOwner:
-		at, err := time.Parse(time.RFC3339Nano, in.ExpiresAt)
-		if err != nil || !at.After(time.Now()) || at.After(until.Add(time.Minute)) {
-			return "", time.Time{}, errs.New(errs.ReasonRequestInvalid, "expires_at is an instant ahead, no later than a confirmation holds")
-		}
-		o.ExpiresAt = in.ExpiresAt
-		key, err := m.ownerKey()
-		if err != nil {
-			return "", time.Time{}, err
-		}
-		if !o.Verify(key, in.Signature) {
-			return "", time.Time{}, errs.New(errs.ReasonPermissionDenied, "the deployment owner's signature does not verify")
-		}
-		basis, who, until = basisOwner, ownerName, at
-		m.rt.Logger.Error("the deployment owner's confirmation was used", "disposition", d.ID, "submitted_by", confirmer)
-	default:
-		return "", time.Time{}, errs.New(errs.ReasonRequestInvalid, "basis is holding or deployment_owner")
+	basis, who, until, err := m.confirmerBasis(ctx, tx, confirmer, in, o, until)
+	if err != nil {
+		return "", time.Time{}, err
 	}
 	id := ids.New().String()
 	_, err = tx.Exec(ctx, `INSERT INTO authz_confirmation (id, disposition, disposition_revision, confirmer, basis, expires_at)

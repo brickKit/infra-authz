@@ -65,15 +65,10 @@ func (m *Module) factsOf(ctx context.Context, tx db.Tx, e entry) (facts, plan, *
 		return f, p, nil, err
 	}
 	f.RecoveryPending = st != stateOperational // rows 13-14 (T6e)
-	units, err := m.units(ctx, tx)
+	s, err := m.standingOf(ctx, tx, e.requester)
 	if err != nil {
 		return f, p, nil, err
 	}
-	held, admin, err := holdingsOf(ctx, tx, e.requester)
-	if err != nil {
-		return f, p, nil, err
-	}
-	s := standing{units: units, held: held, admin: admin, limits: newLimits(units)}
 	var structural bool // the requester may make this change, as the security records stand
 	var pre *changeResult
 	switch {
@@ -89,6 +84,9 @@ func (m *Module) factsOf(ctx context.Context, tx db.Tx, e entry) (facts, plan, *
 		structural, pre, err = m.disposing(ctx, tx, e, s, &f, &p)
 	default:
 		pre = invalid("a change is a widening with a candidate, or names its target")
+	}
+	if e.planItem && (!f.FromState || !f.FromRevision) { // the target moved since the preview: row 17 (security 08)
+		f.FromState, f.FromRevision, f.RevisionsChanged = true, true, true
 	}
 	if err != nil || pre != nil || !f.FromState || !f.FromRevision || f.Kind == RestoreUncomputable {
 		return f, p, pre, err // a restore of an uncomputable record does not check the original requester again

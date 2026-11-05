@@ -76,6 +76,7 @@ type entry struct {
 	req                    request
 	job                    *firing
 	selfOnly               bool // a relinquishment (D82): only the requester's own record
+	planItem               bool // a plan's item: a target moved since the preview is row 17, not row 3 (planrun.go)
 }
 
 // operation is the operation that admitted the entry, for its audit: a relinquishment, a tightening, or a change (a

@@ -20,6 +20,8 @@ var ownKeys = map[string]string{
 	"AUTHZ_SOURCE_HIGH":            "D_src_high (security 03, D64): a duration; default 1m, at most 5m. Views that depend on the identity source stop renewing high-risk operations past this watermark age",
 	"AUTHZ_T_TIGHT":                "T_tight (security 03): a duration; default 1h. A tightening whose requester is judged by the last applied facts of the identity source is done by one person while the source's watermark is no older; beyond it, or on a stalled source, a second authorization admin or the deployment owner confirms",
 	"AUTHZ_MAX_UNIT_DEPTH":         "the levels of management units below the root (security 04, A131): the root unit's max_subdelegation_depth when the install claim makes it, and no unit is made deeper; 1 or more",
+	"AUTHZ_PLAN_MAX_AGE":           "how long a batch plan may run from its preview (security 08, A132): a duration; default 168h; its pending and unreviewed items end then",
+	"AUTHZ_PLAN_CONFIRM_ABOVE":     "the items beyond which a batch plan is a protected operation another authorization admin (or, with none available, the deployment owner) confirms (A132); default 100",
 	"AUTHZ_SOURCE_READ":            "D_src_read (security 03, D64): a duration; default 10m, at most 1h, no shorter than AUTHZ_SOURCE_HIGH. Past this watermark age the views close for ordinary reads too",
 }
 

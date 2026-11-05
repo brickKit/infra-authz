@@ -27,9 +27,11 @@
 
 包含证明（安全 07，3.0.21 起）：授予里的 `self` 按受授人判断，同一个 `self` 对不同的受授人结果不同；新建管理单元时还没有受授人，单元范围里的 `self` 只包含于父单元的 `self`。授予超出预算时驳回（`CONTAINMENT_NOT_PROVEN`，`detail` 写明哪项）：一份授予最多 8 段，一个值集合最多 1,000 个值，一个组织树原子最多 64 项，一个人在一个资源类型与操作上最多 64 段（生效与待生效的合计）。
 
+批量计划（安全 08，3.0.21 起）：一次改很多条时用。确认后本组件逐项经生效点执行（请求者是发起人，一切照常重查），每一项有自己的结果：已生效、已驳回、待复核（预览后目标变了，或项保存了待确认的记录——那条记录生效或结束时项跟着转）；全部有结果时计划为已完成或部分完成。取消或到期（预览起 `AUTHZ_PLAN_MAX_AGE`，起始 7 天）时没执行的项驳回，项保存的、尚未生效的记录一起取消，已生效的不动。
+
 管理单元（3.0.21 起）必须写明 `management_actions`（`grant`、`revoke`、`edit_role`、`bind_role`、`delegate_management`、`share_governance` 中的几项）与 `max_subdelegation_depth`（下面还能再分几层）：持有单元的人在它及以下只能做它与它以上每个单元都列出的动作；子单元的动作不多于父单元、层数小于父单元；根单元的层数是 `AUTHZ_MAX_UNIT_DEPTH`（起始 6）。
 
-3.0.20 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
+3.0.21 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
 - 严格路径（A、B 档）；
 - 成员切换；
 - 共享、委托与扮演；
@@ -95,6 +97,10 @@
   | `POST /api/authz/dispositions` | `infra.authz.security_disposition.dispose`（只减少访问） | 安全处置：`change_key`、`subject`、`domain`（管理单元，缺省为根）、`suspended_segments` 或 `all_scope: true`（只在根）、受保护时的 `confirmation_ids`；回答同变更结果，`record` 是处置的身份 |
   | `GET /api/authz/dispositions` | `infra.authz.security_disposition.read` | 处置的列表 |
   | `POST /api/authz/dispositions/{id}/release` | `infra.authz.security_disposition.release` | 解除：`change_key`、`disposition_revision`、受保护时的 `confirmation_ids`（确认用 `POST /api/authz/confirmations` 的 `disposition` 与 `expected_revision`，所有者待签内容用 `?disposition=`） |
+  | `POST /api/authz/plans` | `.change` | 批量计划的草稿（3.0.21 起）：`plan_key` 与 `items`（每项 `item_key` 与不带 `change_key` 的变更请求）；同一个键再交同样的内容回答同一个计划，内容不同答 `CHANGE_KEY_CONFLICT` |
+  | `POST /api/authz/plans/{id}/preview`、`/confirm`、`/cancel` | `.change` | 发起人预览（记下各项目标的修订，原子比较次数超过 100,000 驳回）、按 `preview_digest` 确认（项数超过 `AUTHZ_PLAN_CONFIRM_ABOVE` 时另带 `confirmation_ids`：别的授权管理员用 `POST /api/authz/confirmations` 的 `plan` 与 `plan_digest` 确认，缺时答 202 `CONFIRMATION_REQUIRED`）、取消 |
+  | `POST /api/authz/plans/{id}/items/{item}/review` | `.change` | 待复核（没有保存记录）的项重新预览后再执行，可带新的 `request`；超过阈值的计划另要绑定 `<项>#<第几次>` 的确认 |
+  | `GET /api/authz/plans/{id}` | `.read` | 计划与每一项的状态、结果（发起人或授权管理员） |
   | `GET /api/authz/records?type=` | `infra.authz.security_record.read` | 调用者看得到的有效安全记录：管理者看全部，持有者只看自己的（维度 `holder`） |
 
 两个生效点路由的请求体都是安全 09a 的 `be.security.change_request`（`requested_by` 与触发方式由本组件从令牌得出，不在请求里）；`tighten` 只发往 `/api/authz/tightenings`，发往 `/api/authz/changes` 的答 `REQUEST_INVALID`。收紧可带 `confirmation_ids`（受保护的收紧与两人规则要先确认）。管理者的授予要同时有 `.change` 与 `.tighten`：

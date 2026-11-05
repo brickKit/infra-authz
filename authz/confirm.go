@@ -44,6 +44,8 @@ const (
 type confirmIn struct {
 	Target           string       `json:"target"`
 	Disposition      string       `json:"disposition,omitempty"` // a disposition's release (release.go): its revision in expected_revision
+	Plan             string       `json:"plan,omitempty"`        // a plan above the threshold (planhttp.go), with the digest it confirms
+	PlanDigest       string       `json:"plan_digest,omitempty"`
 	ExpectedRevision *revisionRef `json:"expected_revision,omitempty"`
 	Basis            string       `json:"basis,omitempty"`      // holding (the default) or deployment_owner
 	ExpiresAt        string       `json:"expires_at,omitempty"` // an owner's confirmation: as signed
@@ -55,9 +57,13 @@ func (m *Module) confirmHTTP(c *httpx.Context) error {
 	if err := c.BindJSON(&in); err != nil {
 		return err
 	}
-	if in.Disposition != "" { // a release's confirmation: under the release operation
+	if in.Disposition != "" || in.Plan != "" { // a release's confirmation, under the release operation; a plan's, under change
+		op, confirm := OpRelease, m.confirmDisposition
+		if in.Plan != "" {
+			op, confirm = OpChange, m.confirmPlan
+		}
 		s, _ := sdkauthz.From(c.Ctx())
-		ctx, _, err := s.Check(c.Ctx(), OpRelease, sdkauthz.Facts{})
+		ctx, _, err := s.Check(c.Ctx(), op, sdkauthz.Facts{})
 		if err != nil {
 			return err
 		}
@@ -65,7 +71,7 @@ func (m *Module) confirmHTTP(c *httpx.Context) error {
 		var id string
 		var until time.Time
 		err = m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
-			id, until, err = m.confirmDisposition(ctx, tx, u.Subject, in)
+			id, until, err = confirm(ctx, tx, u.Subject, in)
 			return err
 		})
 		if err != nil {

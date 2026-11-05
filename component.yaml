@@ -59,6 +59,12 @@ configSchema:
       description: 'the deployment owner''s confirmation key (A124): an Ed25519 public key in PEM; its private key is kept offline by the owner and signs owner confirmations; absent, no owner confirmation is accepted. Not sensitive: a secret key so that file:// delivers it (or AUTHZ_OWNER_KEY_FILE)'
       secret: true
       type: string
+    AUTHZ_PLAN_CONFIRM_ABOVE:
+      description: 'the items beyond which a batch plan is a protected operation another authorization admin (or, with none available, the deployment owner) confirms (A132); default 100; SDK default 100'
+      type: integer
+    AUTHZ_PLAN_MAX_AGE:
+      description: 'how long a batch plan may run from its preview (security 08, A132): a duration; default 168h; its pending and unreviewed items end then; a duration (e.g. 2s, 500ms); SDK default 604800s'
+      type: string
     AUTHZ_RECOVERY_KEY:
       description: 'the deployment owner''s recovery key (A129): an Ed25519 public key in PEM, another key than AUTHZ_OWNER_KEY; its private key is kept offline and signs administrator recovery requests (cmd/recover); absent, no recovery is accepted. Not sensitive: a secret key so that file:// delivers it (or AUTHZ_RECOVERY_KEY_FILE)'
       secret: true

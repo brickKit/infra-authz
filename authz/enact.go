@@ -249,7 +249,10 @@ func (m *Module) transition(ctx context.Context, tx db.Tx, id, state, endReason,
 		state_revision = state_revision + 1, last_change = coalesce($5, last_change), reason = coalesce($6, reason),
 		updated_at = now() WHERE id = $1 RETURNING state_revision`, id, state, nullable(endReason), nullable(holdReason),
 		nullable(change), nullable(reason)).Scan(&rev)
-	return rev, err
+	if err != nil {
+		return rev, err
+	}
+	return rev, m.followRecord(ctx, tx, id, state) // a plan item waiting on it (planrun.go)
 }
 
 func nullable(s string) any {

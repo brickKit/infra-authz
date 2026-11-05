@@ -117,6 +117,10 @@ func Keys() []config.Key {
 		// explicit bound, A131): the root's max_subdelegation_depth when the install claim makes it, and no unit is made
 		// deeper
 		{Name: "AUTHZ_MAX_UNIT_DEPTH", Type: config.Integer, Default: int64(DefaultMaxUnitDepth)},
+		// batch plans (security 08, A132): how long from the preview a plan may run; the items beyond which a plan is a
+		// protected operation a second person confirms
+		{Name: "AUTHZ_PLAN_MAX_AGE", Type: config.Duration, Default: DefaultPlanMaxAge},
+		{Name: "AUTHZ_PLAN_CONFIRM_ABOVE", Type: config.Integer, Default: int64(DefaultPlanConfirmAbove)},
 	}
 }
 

@@ -70,6 +70,8 @@ func (m *Module) Jobs(j *work.Jobs) error {
 	j.Add(work.Job{Name: JobDue, Kind: work.Queue, Effect: work.Local, MaxWait: MaxProcessingWait, Handle: m.due})
 	j.Add(work.Job{Name: JobClosure, Kind: work.Queue, Effect: work.Local, Handle: m.closure})
 	j.Add(work.Job{Name: JobExpiry, Kind: work.Queue, Effect: work.Local, Handle: m.expiry})
+	j.Add(work.Job{Name: JobPlan, Kind: work.Queue, Effect: work.Local, MaxWait: MaxProcessingWait, Handle: m.runPlan})
+	j.Add(work.Job{Name: JobPlanExpiry, Kind: work.Queue, Effect: work.Local, Handle: m.expirePlan})
 	return nil
 }
 
