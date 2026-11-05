@@ -7,6 +7,7 @@
 | 文件 | 内容 |
 | --- | --- |
 | `authz/definition.go` | 组件定义、配置键、本组件自己的资源与操作 |
+| `authz/checks.go` | 整套恢复的核对（线协议第 14 章，SDK 的 `CheckService`，只许恢复工具调用）：本组件审计过的对象按版本答“还在不在”（`Presence`）；授权状态的不变量另由契约的 `RecoveryService.Check` 做 |
 | `authz/module.go` | 系统面与用户面的注册（变更、收紧、确认、按键查询、放弃本人的记录、读取）、`holder` 维度的事实、启动时的状态行与认领的记下 |
 | `authz/submit.go` | `DefinitionService.Submit`：注册表、逐份校验、版本与幂等 |
 | `authz/view.go` | `ViewService.Verify`：按已提交的记录重新计算一个组件的分片（授予的有效段，只含注册了、未退役、属主仍定义着的权限键）；主体的账号状态取自身份来源的投影（`JudgeMany`），来源的水位年龄决定完整续发、只为普通读取续发或关闭 |
