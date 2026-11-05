@@ -20,7 +20,7 @@ import (
 // Identity of the component.
 const (
 	ID      = "infra/authz"
-	Version = "3.0.26"
+	Version = "3.0.27"
 )
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.
@@ -165,6 +165,6 @@ func Definitions() *sdkauthz.Definitions {
 // Definition is the component as the launcher and the shells take it.
 func Definition() component.Definition {
 	return component.Definition{ID: ID, Version: Version, Keys: Keys(), Migrations: migrations(), GRPCPort: GRPCPort,
-		Subscribes: true, Authz: Definitions(),
+		Subscribes: true, Evidence: true, Authz: Definitions(),
 		New: func(rt *runtime.Runtime) (component.Module, error) { return New(rt) }}
 }

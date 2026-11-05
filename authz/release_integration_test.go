@@ -108,6 +108,14 @@ func (e *e2e) releases() {
 	require.Equal(t, 409, code, "a revision the disposition does not have (final: it binds its key): %v", out)
 	code, out = release(sectest.Alice, "rel8", east, "1")
 	require.Equal(t, 200, code, "%v", out)
+	require.Eventually(t, func() bool { // a release restores access: a general record (item 4 T6a)
+		for _, r := range evidenceFor(w, east)["general"] {
+			if r["category"] == "security_widening" {
+				return true
+			}
+		}
+		return false
+	}, 10*time.Second, 100*time.Millisecond, "the release's evidence")
 	assert.Equal(t, recordState{State: "ended", EndReason: "superseded", Revision: 1, StateRev: 3}, withoutReason(recordOf(t, admin, held)))
 	for _, key := range []string{"ds8e", "ds11"} {
 		code, out = release(sectest.Alice, "rel9-"+key, dispositionOf(t, admin, key), "1")

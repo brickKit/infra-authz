@@ -127,6 +127,10 @@ func (e *e2e) plans() {
 	})
 	assert.Equal(t, map[string]string{"a": itemApplied, "b": itemApplied, "c": itemRejected, "d": itemNeedsReview, "e": itemNeedsReview},
 		states(p), "each its own state (CP21)")
+	require.Eventually(t, func() bool { // a tightening item: its intent before its transaction, its conclusion in it (item 4 T6a)
+		ev := evidenceFor(w, x.(string))
+		return len(ev["intent"]) == 1 && len(ev["effective"]) == 1 && ev["intent"][0]["id"] == ev["effective"][0]["id"]
+	}, 10*time.Second, 100*time.Millisecond, "the plan's tightening item's evidence")
 	assert.Equal(t, "executing", p["plan_state"], "items to review keep it open")
 	assert.Equal(t, "revoked", recordOf(t, admin, x).EndReason)
 	assert.Nil(t, items(p)["d"]["record"], "row 17: nothing saved")

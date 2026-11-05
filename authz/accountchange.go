@@ -115,7 +115,7 @@ func accountConfirmationOf(ctx context.Context, tx db.Tx, id, account, state str
 // CheckAccountChange is AccountService.CheckAccountChange (contract-infra-authz alpha.3): it checks, it uses nothing.
 func (m *Module) CheckAccountChange(ctx context.Context, in *authzv3.CheckAccountChangeRequest) (*authzv3.CheckAccountChangeResponse, error) {
 	if !uuidText.MatchString(in.GetAccount()) || !accountStates[in.GetTargetState()] || !uuidText.MatchString(in.GetRequester()) {
-		return nil, errs.New(errs.ReasonRequestInvalid, "account, target_state and requester are required").GRPCStatus().Err()
+		return nil, errs.New(errs.ReasonRequestInvalid, "account, target_state and requester are required")
 	}
 	out := &authzv3.CheckAccountChangeResponse{}
 	err := m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {

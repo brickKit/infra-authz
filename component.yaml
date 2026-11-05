@@ -4,7 +4,7 @@ kind: Component
 metadata:
   id: infra/authz
   name: Authorization
-  version: 3.0.26
+  version: 3.0.27
   description: "The authorization member: definitions submitted by every component, security records changed only at the effect point (containment within the grantor's limit, the last admin), and views verified from the committed records"
   repository: https://github.com/brickKit/infra-authz
 
@@ -36,6 +36,20 @@ local:
 
 configSchema:
   properties:
+    ALERT_WEBHOOK_URL:
+      type: string
+    RUN_PROFILE_ACCESS_KEY:
+      type: string
+    RUN_PROFILE_BUCKET:
+      type: string
+    RUN_PROFILE_REGION:
+      description: SDK default us-east-1
+      type: string
+    RUN_PROFILE_SECRET_KEY:
+      secret: true
+      type: string
+    RUN_PROFILE_URL:
+      type: string
     AUDIT_GRPC_URL:
       description: 'process-level: the same for every member of a shell'
       type: string

@@ -35,7 +35,9 @@
 
 管理单元（3.0.21 起）必须写明 `management_actions`（`grant`、`revoke`、`edit_role`、`bind_role`、`delegate_management`、`share_governance` 中的几项）与 `max_subdelegation_depth`（下面还能再分几层）：持有单元的人在它及以下只能做它与它以上每个单元都列出的动作；子单元的动作不多于父单元、层数小于父单元；根单元的层数是 `AUTHZ_MAX_UNIT_DEPTH`（起始 6）。
 
-3.0.26 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
+证据（3.0.27 起，协议 15）：每次收紧在生效之前先把意图交给证据存储（审计组件的 `EvidenceService`），生效时写结论；放宽生效时写一般记录。证据存储不可达时收紧照常，意图改写进告警渠道（运行档案，配置 `RUN_PROFILE_*`），两处都写不进时记一条严重日志（`evidence_double_failure`）；结论在本地等证据存储恢复后再交。
+
+3.0.27 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
 - 严格路径（A、B 档）；
 - 成员切换；
 - 共享、委托与扮演；
@@ -60,6 +62,7 @@
 - 身份：`IAM_ISSUER`、`IAM_JWKS_URL`、`DEPLOYMENT_ID`。
 - `AUTHZ_GRPC_URL` 指向本组件自己的系统面（`$endpoint:infra/authz:grpc`）。
 - 身份成员的系统面：`IAM_GRPC_URL`（`$endpoint:<身份成员>:grpc`）与 `IAM_COMPONENT`（身份成员的组件 ID，例如 `infra/iam-casdoor`：它出示的证书、账号状态来源的名字）；两者写在装配的共享值里，换身份成员时一起改。身份成员的账号状态流要把 `infra/authz` 列为补取者与读取者（`infra/iam-casdoor` 3.0.17 起）。
+- 运行档案与告警渠道（3.0.27 起，可选）：`RUN_PROFILE_URL`、`RUN_PROFILE_BUCKET`（开了对象锁的桶）、`RUN_PROFILE_ACCESS_KEY`、`RUN_PROFILE_SECRET_KEY`、`ALERT_WEBHOOK_URL`；不配时证据存储不可达期间的意图只记在日志里。
 - 消息系统：`BUS_URL`（账号状态的事件；事件停了也照样经补取取得，只是慢一些）。
 
 ## 依赖说明

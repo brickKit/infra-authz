@@ -339,7 +339,7 @@ func (m *Module) view(ctx context.Context, tx db.Tx, component string) (raw []by
 // cached; the held digest equal to the current one is unchanged, anything else gets the current view.
 func (m *Module) Verify(ctx context.Context, in *authzv3.VerifyRequest) (*authzv3.VerifyResponse, error) {
 	if caller, _ := grpcx.Caller(ctx); caller != in.GetComponent() {
-		return nil, errs.New(errs.ReasonPermissionDenied, "a component verifies only its own view").GRPCStatus().Err()
+		return nil, errs.New(errs.ReasonPermissionDenied, "a component verifies only its own view")
 	}
 	var raw []byte
 	var digest string

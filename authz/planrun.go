@@ -11,6 +11,7 @@ import (
 	"github.com/brickKit/be-sdk-go/v3/audit"
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/errs"
+	"github.com/brickKit/be-sdk-go/v3/evidence"
 	"github.com/brickKit/be-sdk-go/v3/work"
 	"github.com/jackc/pgx/v5"
 )
@@ -58,7 +59,22 @@ func (m *Module) runPlan(ctx context.Context, r *work.Run) error {
 	}
 	var denied *entry
 	var res changeResult
-	err := r.Complete(ctx, func(ctx context.Context, tx db.Tx) error {
+	// a tightening item's intent before its transaction (assembly protocol 15, P12.16): the next pending item, read
+	// without a lock; the transaction concludes it only if it runs that same item and it applies
+	peeked, pending, err := m.planIntent(ctx, a.Plan)
+	if err != nil {
+		return err
+	}
+	concluded := false
+	defer func() {
+		if pending != nil && !concluded {
+			if cerr := pending.Cancelled(ctx); cerr != nil {
+				m.rt.Logger.Error("a plan item's cancelled conclusion could not be queued", "id", pending.ID, "error", cerr.Error())
+			}
+		}
+	}()
+	err = r.Complete(ctx, func(ctx context.Context, tx db.Tx) error {
+		concluded = false
 		p, err := lockPlan(ctx, tx, a.Plan)
 		if err != nil || p == nil || p.State != planConfirmed && p.State != planExecuting {
 			return err
@@ -100,8 +116,15 @@ func (m *Module) runPlan(ctx context.Context, r *work.Run) error {
 		if e.digest, err = requestDigest(p.Initiator, e.req); err != nil {
 			return err
 		}
-		if res, _, err = m.effect(ctx, tx, e); err != nil {
+		var v verdict
+		if res, v, err = m.effect(ctx, tx, e); err != nil {
 			return err
+		}
+		if pending != nil && it.Key == peeked && res.Outcome == "applied" && v.Row != 1 {
+			if err := pending.Effective(ctx, tx); err != nil {
+				return err
+			}
+			concluded = true
 		}
 		state, wait := itemState(res)
 		if wait {
@@ -118,6 +141,33 @@ func (m *Module) runPlan(ctx context.Context, r *work.Run) error {
 		m.denied(ctx, *denied, res)
 	}
 	return err
+}
+
+// planIntent writes the intent of a plan's next pending item when it is a tightening: the item's key and the pending
+// evidence ("" and nil otherwise).
+func (m *Module) planIntent(ctx context.Context, plan string) (string, *evidence.Pending, error) {
+	if m.rt.Evidence == nil {
+		return "", nil, nil
+	}
+	var key, initiator string
+	var raw []byte
+	err := m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
+		return tx.QueryRow(ctx, `SELECT i.item_key, i.request, p.initiator FROM authz_plan_item i JOIN authz_plan p ON p.id = i.plan
+			WHERE i.plan = $1 AND i.item_state = 'pending' ORDER BY i.position LIMIT 1`, plan).Scan(&key, &raw, &initiator)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	var req request
+	if err := json.Unmarshal(raw, &req); err != nil || req.Direction != Tighten {
+		return "", nil, nil
+	}
+	p, err := m.rt.Evidence.Intent(ctx, "security_tightening", "", evidence.Object{Type: Records, ID: req.Target,
+		Version: revisionValue(req.ExpectedStateRevision)}, tighteningChange(initiator, req))
+	return key, p, err
 }
 
 // setItem records an item's state; next enqueues the plan's next run.

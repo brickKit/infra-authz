@@ -62,7 +62,7 @@ type accepted struct {
 // Submit is DefinitionService.Submit (contract-infra-authz README, "成员的义务").
 func (m *Module) Submit(ctx context.Context, in *authzv3.SubmitRequest) (*authzv3.SubmitResponse, error) {
 	if caller, _ := grpcx.Caller(ctx); caller != in.GetComponent() {
-		return nil, errs.New(errs.ReasonPermissionDenied, "the component submits only its own definitions").GRPCStatus().Err()
+		return nil, errs.New(errs.ReasonPermissionDenied, "the component submits only its own definitions")
 	}
 	reg, err := m.registry()
 	if err != nil {

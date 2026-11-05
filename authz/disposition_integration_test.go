@@ -52,6 +52,13 @@ func (e *e2e) dispositions() {
 	require.NoError(t, admin.QueryRow(ctx, "SELECT operation FROM "+itSchema+".be_audit_log WHERE target->>'id' = $1",
 		out["record"]).Scan(&op))
 	assert.Equal(t, OpDispose, op)
+	// its evidence: the intent carries the disposition itself, what a replay applies again (item 4 T6a, P12.9)
+	var dispEv map[string][]map[string]any
+	require.Eventually(t, func() bool { dispEv = evidenceByKey(w, "ds3"); return len(dispEv["effective"]) == 1 }, 10*time.Second,
+		100*time.Millisecond, "the disposition's evidence")
+	require.Len(t, dispEv["intent"], 1)
+	cand, _ := dispEv["intent"][0]["change"].(map[string]any)["candidate"].(map[string]any)
+	assert.Equal(t, grace, cand["subject"], "the candidate in the evidence: %v", dispEv["intent"][0]["change"])
 
 	// a renewal of the held grant takes effect, and a new grant over the east too; neither gives the east (CP31)
 	renewal := widenReq("ds4", "grant", map[string]any{"governance_unit": root, "grantee": grace, "predecessor": east["record"],

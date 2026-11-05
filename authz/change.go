@@ -12,6 +12,7 @@ import (
 	"github.com/brickKit/be-sdk-go/v3/canon"
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/errs"
+	"github.com/brickKit/be-sdk-go/v3/evidence"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -151,16 +152,67 @@ func (m *Module) changeAs(ctx context.Context, requester string, req request, se
 	}
 	e := entry{namespace: requester, key: req.ChangeKey, digest: digest, requester: requester, trigger: ByUser, req: req,
 		selfOnly: selfOnly}
+	// a tightening's intent goes to the evidence before the effect point (assembly protocol 15, P12.16): never held
+	// back by it; the conclusion follows in the effect point's transaction, or cancelled when nothing applied
+	var pending *evidence.Pending
+	if req.Direction == Tighten && m.rt.Evidence != nil {
+		if pending, err = m.rt.Evidence.Intent(ctx, "security_tightening", "", evidence.Object{Type: Records,
+			ID: req.Target, Version: revisionValue(req.ExpectedStateRevision)}, tighteningChange(requester, req)); err != nil {
+			return changeResult{}, err
+		}
+	}
 	var res changeResult
+	concluded := false
 	err = m.rt.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
-		res, _, err = m.effect(ctx, tx, e)
-		return err
+		var v verdict
+		concluded = false
+		if res, v, err = m.effect(ctx, tx, e); err != nil {
+			return err
+		}
+		if pending != nil && res.Outcome == "applied" && v.Row != 1 { // applied now, not a bound result again
+			concluded = true
+			return pending.Effective(ctx, tx)
+		}
+		return nil
 	})
+	if pending != nil && !concluded {
+		if cerr := pending.Cancelled(ctx); cerr != nil {
+			m.rt.Logger.Error("a tightening's cancelled conclusion could not be queued", "id", pending.ID, "error", cerr.Error())
+		}
+	}
 	if err != nil {
 		return changeResult{}, err
 	}
 	m.denied(ctx, e, res)
 	return res, nil
+}
+
+// revisionValue is a revision reference's value, "" for none.
+func revisionValue(r *revisionRef) string {
+	if r == nil {
+		return ""
+	}
+	return r.Value
+}
+
+// tighteningChange is what a tightening's evidence records: the change itself (P12.9), never the resulting state.
+func tighteningChange(requester string, req request) map[string]any {
+	c := map[string]any{"direction": req.Direction, "requested_by": requester, "change_key": req.ChangeKey}
+	if req.Termination != "" {
+		c["termination"] = req.Termination
+	}
+	if req.Target != "" {
+		c["target"] = req.Target
+	}
+	if len(req.Candidate) > 0 { // the narrowed content or the disposition itself: what a replay applies again
+		d := json.NewDecoder(bytes.NewReader(req.Candidate))
+		d.UseNumber()
+		var v any
+		if d.Decode(&v) == nil {
+			c["candidate"] = v
+		}
+	}
+	return c
 }
 
 // denied audits a final rejection (a key conflict is not one: nothing was decided).
@@ -215,6 +267,14 @@ func (m *Module) effect(ctx context.Context, tx db.Tx, e entry) (changeResult, v
 	res, err := m.enact(ctx, tx, e, p, v)
 	if err != nil {
 		return res, v, err
+	}
+	if res.Outcome == "applied" && (e.req.Direction == Widen || e.req.Direction == "release") && m.rt.Evidence != nil {
+		// a widening (a release restores access too), in its transaction
+		if _, err := m.rt.Evidence.General(ctx, tx, "security_widening", "", evidence.Object{Type: Records, ID: res.Record,
+			Version: revisionValue(res.NewRevision)}, map[string]any{"direction": Widen, "requested_by": e.requester,
+			"trigger": e.trigger, "change_key": e.key}); err != nil {
+			return res, v, err
+		}
 	}
 	if res.Outcome == "applied" && f.AffectsAdmins { // an admin may have become unavailable (T6e)
 		if err := m.judgeAdmins(ctx, tx); err != nil {
