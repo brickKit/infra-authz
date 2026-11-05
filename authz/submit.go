@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/brickKit/be-sdk-go/v3/audit"
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/errs"
@@ -78,6 +79,7 @@ func (m *Module) Submit(ctx context.Context, in *authzv3.SubmitRequest) (*authzv
 	}
 	bad = append(bad, crossCheck(defs)...)
 	if len(bad) > 0 {
+		m.ownerMismatch(ctx, in.GetComponent(), in.GetVersion(), bad)
 		return rejected(bad), nil
 	}
 	sealed := make([]sdkauthz.Sealed, len(defs))
@@ -129,6 +131,26 @@ func (m *Module) Submit(ctx context.Context, in *authzv3.SubmitRequest) (*authzv
 	return &authzv3.SubmitResponse{Status: authzv3.SubmitStatus_SUBMIT_STATUS_ACCEPTED, SetDigest: set}, nil
 }
 
+// ownerMismatch records the security event of a submission naming what another component owns (security 09a's
+// EN21, EN23: an authority, resource type or permission key registered to another): a denial in this member's audit,
+// the submitter as actor. A failed write never changes the rejection (P8.19).
+func (m *Module) ownerMismatch(ctx context.Context, component, version string, bad []rejection) {
+	var details []string
+	for _, r := range bad {
+		if r.reason == "DEFINITION_OWNER_MISMATCH" {
+			details = append(details, r.detail)
+		}
+	}
+	if len(details) == 0 {
+		return
+	}
+	if err := m.rt.Audit.Denial(ctx, audit.Record{Category: audit.SecurityDenial, Operation: OpSubmit, Outcome: audit.Denied,
+		Reason: "DEFINITION_OWNER_MISMATCH", Actor: component,
+		Changes: map[string]any{"component": component, "version": version, "mismatches": details}}); err != nil {
+		m.rt.Logger.Error("the security event of a definition owner mismatch was not recorded", "error", err.Error())
+	}
+}
+
 func rejected(bad []rejection) *authzv3.SubmitResponse {
 	out := &authzv3.SubmitResponse{Status: authzv3.SubmitStatus_SUBMIT_STATUS_REJECTED}
 	for _, r := range bad {
@@ -169,6 +191,14 @@ func (m *Module) check(component string, d *authzv3.Definition, reg registry) (a
 			fd, _ := f.(map[string]any)
 			if fd["class"] == "restricted" && fd["read_key"] == nil {
 				no("DEFINITION_INVALID", "restricted field "+name+" has no read_key")
+			}
+		}
+		// EN22: an attachment category names a field of this resource (its owner judges attachments by that field)
+		cats, _ := body["attachment_categories"].(map[string]any)
+		for name, c := range cats {
+			cat, _ := c.(map[string]any)
+			if f, _ := cat["field"].(string); fields[f] == nil {
+				no("DEFINITION_INVALID", fmt.Sprintf("attachment category %s: field %q is not a field of %s", name, f, a.key))
 			}
 		}
 		dims, _ := body["dimensions"].(map[string]any)

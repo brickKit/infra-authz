@@ -59,9 +59,10 @@ func readState(ctx context.Context, tx db.Tx) (state, error) {
 // definitionsOf reads a component's current accepted definitions: resource definitions by type, with the version.
 type defined struct {
 	version    string
-	resources  map[string]map[string]any // type -> fields
-	digests    map[string]string         // type -> the resource definition's digest
-	operations map[string]bool           // the operation keys its definitions declare
+	resources  map[string]map[string]any     // type -> the resource definition's body
+	declared   map[string]*sdkauthz.Resource // type -> the same as the SDK's declaration (the segment checks)
+	digests    map[string]string             // type -> the resource definition's digest
+	operations map[string]bool               // the operation keys its definitions declare
 }
 
 // relinquishFrom is the fixed relinquish segment's validity: from always (D82).
@@ -111,14 +112,17 @@ func holders(ctx context.Context, tx db.Tx, grants []record) (map[string]string,
 }
 
 // usable: a segment of this component's resource types whose permission key is registered, not retired and still
-// defined by the component (security 08: only those take part in an effective segment).
+// defined by the component (security 08: only those take part in an effective segment), and that fits the resource's
+// current definition: a grant made before the resource gained a dimension lacks its atom and is never read as "all"
+// on it (security 07's FX01); it waits for a narrowing or a renewal that names the dimension.
 func (d defined) usable(s sdkauthz.Segment, reg registry) bool {
-	_, mine := d.resources[s.ResourceType]
-	return mine && d.operations[s.Operation] && reg.usable(s.Operation)
+	r, mine := d.declared[s.ResourceType]
+	return mine && d.operations[s.Operation] && reg.usable(s.Operation) && s.Check(r) == nil
 }
 
 func definitionsOf(ctx context.Context, tx db.Tx, component string) (defined, bool, error) {
-	d := defined{resources: map[string]map[string]any{}, digests: map[string]string{}, operations: map[string]bool{}}
+	d := defined{resources: map[string]map[string]any{}, declared: map[string]*sdkauthz.Resource{}, digests: map[string]string{},
+		operations: map[string]bool{}}
 	rows, err := tx.Query(ctx, `SELECT c.version, d.record_type, d.key, d.digest, d.record FROM authz_component c
 		JOIN authz_definition_set s ON s.component = c.component AND s.version = c.version
 		JOIN authz_definition d ON d.digest = ANY(s.digests)
@@ -143,7 +147,7 @@ func definitionsOf(ctx context.Context, tx db.Tx, component string) (defined, bo
 		if err := json.Unmarshal(raw, &body); err != nil {
 			return d, false, err
 		}
-		d.resources[key], d.digests[key] = body, digest
+		d.resources[key], d.declared[key], d.digests[key] = body, resourceOf(body), digest
 	}
 	return d, d.version != "", rows.Err()
 }

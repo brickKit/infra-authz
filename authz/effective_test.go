@@ -70,6 +70,11 @@ func TestAtomIntersection(t *testing.T) {
 			&sdkauthz.Atom{Kind: "interval", Currency: "EUR", Lo: str("10"), LoClosed: flag(true), Hi: str("10.0"), HiClosed: flag(true)}},
 		{"another currency: empty", interval("EUR", "0", true, "", false), interval("USD", "0", true, "", false), "", nil},
 		{"a pair outside the table: empty, never more", vals("a"), tree("/a", "subtree"), "", nil},
+		// FX03: an explicit empty set, tree or interval leaves the segment out of the view, with all as well
+		{"all with an explicit empty set: empty", all, vals(), "", nil},
+		{"an explicit empty set with all: empty", vals(), all, "", nil},
+		{"all with an empty tree: empty", all, tree(), "", nil},
+		{"all with an empty interval: empty", all, interval("EUR", "10", true, "10", false), "", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, ok := atomIntersect(c.x, c.y, c.grantee)
@@ -188,7 +193,8 @@ func TestOnlyUsableKeysTakePart(t *testing.T) {
 	reg, err := parseRegistry("permission\tdemo.order.read\tdemo/orders\npermission\tdemo.order.export\tdemo/orders\t2026-10-01\n" +
 		"permission\tdemo.order.cancel\tdemo/orders\n")
 	require.NoError(t, err)
-	d := defined{resources: map[string]map[string]any{"demo.order": {}},
+	order := &sdkauthz.Resource{Type: "demo.order", Dimensions: map[string]sdkauthz.Dimension{"region": {Kind: sdkauthz.ValueSet}}}
+	d := defined{resources: map[string]map[string]any{"demo.order": {}}, declared: map[string]*sdkauthz.Resource{"demo.order": order},
 		operations: map[string]bool{"demo.order.read": true, "demo.order.export": true, "demo.order.archive": true}}
 	at := func(op string) sdkauthz.Segment { return oseg(op, all(), nil, jan, "") }
 	assert.True(t, d.usable(at("demo.order.read"), reg))
@@ -198,4 +204,11 @@ func TestOnlyUsableKeysTakePart(t *testing.T) {
 	other := at("demo.order.read")
 	other.ResourceType = "demo.invoice"
 	assert.False(t, d.usable(other, reg), "another component's resource type")
+	// FX01: the resource gained a dimension; a grant made before it lacks the atom and is never read as all
+	d.declared["demo.order"] = &sdkauthz.Resource{Type: "demo.order", Dimensions: map[string]sdkauthz.Dimension{
+		"region": {Kind: sdkauthz.ValueSet}, "warehouse": {Kind: sdkauthz.ValueSet}}}
+	assert.False(t, d.usable(at("demo.order.read"), reg), "a segment missing the new dimension")
+	wide := at("demo.order.read")
+	wide.Atoms = map[string]sdkauthz.Atom{"region": all(), "warehouse": all()}
+	assert.True(t, d.usable(wide, reg), "a segment naming every dimension")
 }

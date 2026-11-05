@@ -252,6 +252,10 @@ func (e *e2e) definitionsAndViews() {
 	require.NoError(t, foreign.Validate())
 	assert.ErrorAs(t, foreign.Submit(ctx, defs, w.Deployment, "3.0.1"), &rej)
 	assert.Contains(t, rej.Error(), "DEFINITION_OWNER_MISMATCH", "another component's resource type and keys")
+	var events int // EN21, EN23: the mismatch is a security event in this member's audit, the submitter as actor
+	require.NoError(t, e.admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_audit_log WHERE category = 'security_denial'"+
+		" AND reason = 'DEFINITION_OWNER_MISMATCH' AND actor->>'id' = 'demo/orders' AND operation = $1", OpSubmit).Scan(&events))
+	assert.Equal(t, 1, events)
 	_, err = defs.Submit(ctx, &authzv3.SubmitRequest{Component: "erp/sales", Version: "1"})
 	assert.Error(t, err, "a component submits only for itself")
 

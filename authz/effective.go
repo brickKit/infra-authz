@@ -133,9 +133,9 @@ func common(a, b []string) []string {
 func atomIntersect(x, y sdkauthz.Atom, grantee string) (sdkauthz.Atom, bool) {
 	switch {
 	case x.Kind == "all":
-		return y, true
+		return y, atomNonEmpty(y)
 	case y.Kind == "all":
-		return x, true
+		return x, atomNonEmpty(x)
 	case x.Kind == "in" && y.Kind == "in":
 		v := common(x.Values, y.Values)
 		return sdkauthz.Atom{Kind: "in", Values: v}, len(v) > 0
@@ -190,6 +190,20 @@ func tighterBound(a *string, aClosed *bool, b *string, bClosed *bool, side int) 
 		return a, aClosed
 	}
 	return b, bClosed
+}
+
+// atomNonEmpty: an explicit empty set, an empty tree or an empty interval leaves the segment out of the view (security
+// 07's FX03); a kind this code does not compare is not judged here.
+func atomNonEmpty(a sdkauthz.Atom) bool {
+	switch a.Kind {
+	case "in":
+		return len(a.Values) > 0
+	case "tree":
+		return len(a.Items) > 0
+	case "interval":
+		return nonEmpty(a)
+	}
+	return true
 }
 
 func nonEmpty(a sdkauthz.Atom) bool {
