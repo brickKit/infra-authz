@@ -20,7 +20,7 @@ import (
 // Identity of the component.
 const (
 	ID      = "infra/authz"
-	Version = "3.0.24"
+	Version = "3.0.25"
 )
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.
@@ -45,6 +45,8 @@ const (
 	System   = "infra.authz.system"
 	OpVerify = "infra.authz.system.verify"
 	OpSubmit = "infra.authz.system.submit"
+	// OpAccountCheck is AccountService.CheckAccountChange: the identity member only (T9c)
+	OpAccountCheck = "infra.authz.system.account_check"
 	// OpClaim consumes the install claim: nobody is granted it, the claim itself says who may (A130)
 	OpClaim        = "infra.authz.system.claim"
 	SystemRead     = "infra.authz.system.read"
@@ -154,6 +156,7 @@ func Definitions() *sdkauthz.Definitions {
 			{Key: SystemRead, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpVerify, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpSubmit, ResourceType: System, Purpose: "manage", RiskClass: "low", SideEffects: []string{"security_change"}},
+			{Key: OpAccountCheck, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpClaim, ResourceType: System, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
 				Audit: true},
 		}}

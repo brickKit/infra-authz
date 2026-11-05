@@ -102,7 +102,8 @@ func activeAccount(jd projection.Judged) (proof, error) {
 // provable.
 func (m *Module) adminsAfter(ctx context.Context, tx db.Tx, ended []string) (proof, error) {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT body->>'holder' FROM authz_record WHERE state = 'active'
-		AND record_type = 'management_holding' AND body->>'system_role' = 'authorization_admin' AND id::text <> ALL($1)`,
+		AND record_type = 'management_holding' AND body->>'system_role' = 'authorization_admin' AND id::text <> ALL($1)
+		AND NOT coalesce((body->>'confirmation_backfill_pending')::boolean, false)`, // a holding awaiting a reconfirmation is not available (T9d)
 		nonNil(ended))
 	if err != nil {
 		return unprovable, err

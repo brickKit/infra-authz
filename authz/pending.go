@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/brickKit/be-sdk-go/v3/audit"
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
@@ -53,7 +54,8 @@ func (m *Module) judgeAdmins(ctx context.Context, tx db.Tx) error {
 	case avail == proven:
 		return nil
 	}
-	rows, err := tx.Query(ctx, `SELECT id::text, state, coalesce(hold_reason, '') FROM authz_record
+	rows, err := tx.Query(ctx, `SELECT id::text, state, coalesce(hold_reason, '')
+			|| CASE WHEN coalesce((body->>'confirmation_backfill_pending')::boolean, false) THEN '+backfill' ELSE '' END FROM authz_record
 		WHERE record_type = 'management_holding' AND body->>'system_role' = 'authorization_admin' AND state <> 'ended'`)
 	if err != nil {
 		return err
@@ -67,6 +69,8 @@ func (m *Module) judgeAdmins(ctx context.Context, tx db.Tx) error {
 		var state, hold string
 		err := r.Scan(&u.Holding, &state, &hold)
 		switch {
+		case strings.HasSuffix(hold, "+backfill"):
+			u.Cause = "confirmation_backfill_pending"
 		case hold == "security_hold":
 			u.Cause = "security_disposition"
 		case hold == "uncomputable" || hold == "restore_pending":

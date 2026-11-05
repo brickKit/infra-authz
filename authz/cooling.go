@@ -33,8 +33,9 @@ type admin struct {
 }
 
 func adminsBesides(ctx context.Context, tx db.Tx, requester string, excluded ...string) ([]admin, error) {
-	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (body->>'holder') body->>'holder', state = 'active',
-			updated_at > now() - $2::interval, coalesce(last_change LIKE $3 || ':%', false)
+	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (body->>'holder') body->>'holder',
+			state = 'active' AND NOT coalesce((body->>'confirmation_backfill_pending')::boolean, false),
+			updated_at > now() - $2::interval, state <> 'active' AND coalesce(last_change LIKE $3 || ':%', false)
 		FROM authz_record WHERE record_type = 'management_holding' AND body->>'system_role' = 'authorization_admin'
 			AND body->>'holder' <> ALL($1) AND coalesce(end_reason, '') <> 'superseded'
 		ORDER BY body->>'holder', state = 'active' DESC, updated_at DESC`, excluded, CoolingOff.String(), requester)
@@ -50,7 +51,8 @@ func adminsBesides(ctx context.Context, tx db.Tx, requester string, excluded ...
 
 // madeUnavailableBy: an authorization admin besides the excluded that the requester's own change ended or held within
 // the cooling-off, and that holds no active holding since. It still counts as available for the owner's key to stand
-// in (CP108).
+// in (CP108). An active holding awaiting a reconfirmation was made unavailable by its account's status, never by a
+// requester, even when a requester's change (a release) touched it last.
 func madeUnavailableBy(ctx context.Context, tx db.Tx, requester string, excluded ...string) (bool, error) {
 	as, err := adminsBesides(ctx, tx, requester, excluded...)
 	if err != nil {

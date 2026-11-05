@@ -25,6 +25,8 @@
 
 身份成员冻结一个账号，或把它标为被盗、可疑并停用时，本组件应用这个状态的同时建立一条全局的处置（暂停这个人的全部段，他的生效记录转为暂停）；同一账号再有冻结或标记并入这条处置。身份侧解冻不解除它；解除要由根单元的管理者列出要移除的证据（`signal_refs`，形如 `<账号>@<状态修订>`），全部移除才真正解除。第一次见到就已冻结的账号不算转变。
 
+账号状态变更（3.0.25 起）：身份成员停用、冻结、启用、解冻一个账号之前问本组件（系统面 `AccountService.CheckAccountChange`）：账号是授权管理员时一律要另一名授权管理员确认（`POST /api/authz/confirmations` 带 `account` 与 `target_state`，确认绑定账号、目标状态与变更前的安全状态版本）；普通账号只在身份成员要第二人时（它的依据过旧）才要。部署所有者的确认对停用、冻结随时可以代替，对启用只在没有别的可用管理员时可以。身份成员把确认 ID 随账号状态发来，本组件应用状态时把它用掉。管理员账号在身份产品里被直接重新启用、没有带确认时，他的管理员持有资格待补确认、不可用，直到另一名管理员确认后调 `POST /api/authz/accounts/{principal}/reconfirm`。
+
 可证明没有可用的授权管理员时（最后一名被处置、账号被停用等），部署进入待恢复（`GET /api/authz/admin-state`）：新建或扩大管理单元、授出管理持有资格一律答 `RECOVERY_IN_PROGRESS`，普通授予与收紧照常；只能由部署所有者做管理员恢复退出：在部署机上用离线的恢复私钥运行 `recover`（`-action replace -holding <持有资格>` 暂停被盗的管理员，`-action restore -identity <主体>` 恢复一名管理员，`-action abort` 中止），请求发到 `POST /api/authz/recovery`，每个请求只能用一次。恢复会推进授权恢复代次，各组件丢弃旧视图。
 
 包含证明（安全 07，3.0.21 起）：授予里的 `self` 按受授人判断，同一个 `self` 对不同的受授人结果不同；新建管理单元时还没有受授人，单元范围里的 `self` 只包含于父单元的 `self`。授予超出预算时驳回（`CONTAINMENT_NOT_PROVEN`，`detail` 写明哪项）：一份授予在一个资源类型与操作上最多 8 段（3.0.22 起；3.0.21 误按整份授予计，多操作的角色会被驳回），一个值集合最多 1,000 个值，一个组织树原子最多 64 项，一个人在一个资源类型与操作上最多 64 段（生效与待生效的合计）。
@@ -33,7 +35,7 @@
 
 管理单元（3.0.21 起）必须写明 `management_actions`（`grant`、`revoke`、`edit_role`、`bind_role`、`delegate_management`、`share_governance` 中的几项）与 `max_subdelegation_depth`（下面还能再分几层）：持有单元的人在它及以下只能做它与它以上每个单元都列出的动作；子单元的动作不多于父单元、层数小于父单元；根单元的层数是 `AUTHZ_MAX_UNIT_DEPTH`（起始 6）。
 
-3.0.24 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
+3.0.25 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
 - 严格路径（A、B 档）；
 - 成员切换；
 - 共享、委托与扮演；
@@ -51,10 +53,10 @@
   - 资源类型与权限键的属主，由装配从注册表生成；
   - 格式是 TSV，三列为 `kind`、`key`、`owner_component`，`kind` 取 `resource_type` 或 `permission`；已退役的权限键多第四列，写退役日期：退役的键不再给任何访问（授予照旧，视图里它的段为空）；
   - 本组件约 30 秒重读一次这个文件，退役在那之后的下一次核验生效；
-  - 本组件自己的键也要在里面。
+  - 本组件自己的键也要在里面（3.0.25 起含 `infra.authz.system.account_check`）。
 - `AUTHZ_OWNER_KEY`（通常 `file://`）：部署所有者确认的公钥（Ed25519，PEM）。安装时用 `owner-sign -keygen` 生成密钥对，私钥交部署所有者离线保管。只有一名授权管理员时，新建管理单元与授出管理持有资格都要用它确认；没有配置时这类变更只能由另一名授权管理员确认。
 - `AUTHZ_INSTALL_CLAIM`（通常 `file://`）：安装认领，`principal:<平台主体>` 或 `code:sha256:<一次性确认码的摘要>`；第一次启动、还没有任何管理时记下，认领人登录后调 `POST /api/authz/claim`（确认码放在请求体的 `code`）成为第一个授权管理员，只能用一次；`AUTHZ_INSTALL_CLAIM_VALIDITY` 是有效期（起始 7 天）。
-- 部署的服务证书（`SERVICE_TLS_*`）。系统面只接受 mTLS，部署里每个组件都可以调用它的两个系统方法。
+- 部署的服务证书（`SERVICE_TLS_*`）。系统面只接受 mTLS，部署里每个组件都可以调用它的两个系统方法（`Verify`、`Submit`）；`AccountService.CheckAccountChange` 只许身份成员（`IAM_COMPONENT`）。
 - 身份：`IAM_ISSUER`、`IAM_JWKS_URL`、`DEPLOYMENT_ID`。
 - `AUTHZ_GRPC_URL` 指向本组件自己的系统面（`$endpoint:infra/authz:grpc`）。
 - 身份成员的系统面：`IAM_GRPC_URL`（`$endpoint:<身份成员>:grpc`）与 `IAM_COMPONENT`（身份成员的组件 ID，例如 `infra/iam-casdoor`：它出示的证书、账号状态来源的名字）；两者写在装配的共享值里，换身份成员时一起改。身份成员的账号状态流要把 `infra/authz` 列为补取者与读取者（`infra/iam-casdoor` 3.0.17 起）。
@@ -85,15 +87,16 @@
 
 ## 契约索引
 
-- 系统面：`contract-infra-authz` 的 `be.authz.v3.ViewService/Verify` 与 `be.authz.v3.DefinitionService/Submit`。成员的义务写在那个仓库的 README 里。
+- 系统面：`contract-infra-authz` 的 `be.authz.v3.ViewService/Verify`、`be.authz.v3.DefinitionService/Submit` 与 `be.authz.v3.AccountService/CheckAccountChange`（alpha.3 起，只许身份成员）。成员的义务写在那个仓库的 README 里。
 - 用户面：
 
   | 路由 | 操作 | 说明 |
   | --- | --- | --- |
   | `POST /api/authz/changes` | `infra.authz.security_record.change` | 生效点：放宽与中性变更，见下 |
   | `POST /api/authz/tightenings` | `infra.authz.security_record.tighten`（只减少访问） | 生效点：收紧，见下；身份来源停住时照常可用 |
-  | `POST /api/authz/confirmations` | 已保存的放宽：`.change`；收紧：`.tighten` | 确认一项受保护的变更或两人规则下的收紧：`target`；收紧另带 `expected_revision`；部署所有者确认另带 `basis: deployment_owner`、`expires_at` 与 `signature`。回答确认的 `id` 与 `expires_at`（201） |
-  | `GET /api/authz/confirmations/owner-payload?target=&expected_revision=` | 同上 | 部署所有者要签的内容（`owner-sign` 与种子用） |
+  | `POST /api/authz/confirmations` | 已保存的放宽：`.change`；收紧：`.tighten` | 确认一项受保护的变更或两人规则下的收紧：`target`；收紧另带 `expected_revision`；账号状态变更带 `account` 与 `target_state`（账号的目标状态是 `active` 时要 `.change`，否则 `.tighten`）；部署所有者确认另带 `basis: deployment_owner`、`expires_at` 与 `signature`。回答确认的 `id` 与 `expires_at`（201） |
+  | `GET /api/authz/confirmations/owner-payload?target=&expected_revision=` | 同上 | 部署所有者要签的内容（`owner-sign` 与种子用）；账号状态变更用 `?account=&target_state=` |
+| `POST /api/authz/accounts/{principal}/reconfirm` | `.change`（受保护） | 待补确认的管理员持有资格补上确认：`confirmation`（另一名管理员对 `account` 与 `target_state: active` 的确认）；缺时答 202 `CONFIRMATION_REQUIRED`，成功 204 |
   | `GET /api/authz/changes/{change_key}` | `.change`、`.tighten` 或 `.relinquish` | 按变更键查询结果（键在调用者自己的命名空间里；没有绑定的答 `unbound`） |
   | `POST /api/authz/relinquishments` | `infra.authz.security_record.relinquish` | 放弃自己的一整条授予或管理持有资格（D82）：谁也不用授予，本组件给每个持有者一段固定的段 |
   | `POST /api/authz/dispositions` | `infra.authz.security_disposition.dispose`（只减少访问） | 安全处置：`change_key`、`subject`、`domain`（管理单元，缺省为根）、`suspended_segments` 或 `all_scope: true`（只在根）、受保护时的 `confirmation_ids`；回答同变更结果，`record` 是处置的身份 |

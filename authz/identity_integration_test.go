@@ -51,6 +51,15 @@ func (m *iamModule) set(ctx context.Context, principal, status string, version i
 
 // setMarked is set with a security mark (compromised, suspicious; security 09a).
 func (m *iamModule) setMarked(ctx context.Context, principal, status, mark string, version int64) error {
+	return m.send(ctx, principal, status, mark, "", version)
+}
+
+// setConfirmed is set carrying the confirmation the change used (09a's confirmation; T9d).
+func (m *iamModule) setConfirmed(ctx context.Context, principal, status, confirmation string, version int64) error {
+	return m.send(ctx, principal, status, "", confirmation, version)
+}
+
+func (m *iamModule) send(ctx context.Context, principal, status, mark, confirmation string, version int64) error {
 	rec := map[string]any{
 		"record_type": "be.security.account_status", "schema": "1.0", "deployment": m.rt.Config.String("DEPLOYMENT_ID"),
 		"authority": iamID, "id": principal,
@@ -59,6 +68,9 @@ func (m *iamModule) setMarked(ctx context.Context, principal, status, mark strin
 		"status":   status, "security_version": version}
 	if mark != "" {
 		rec["security_mark"] = mark
+	}
+	if confirmation != "" {
+		rec["confirmation"] = confirmation
 	}
 	raw, _, err := records.Seal("be.security.account_status", rec)
 	if err != nil {

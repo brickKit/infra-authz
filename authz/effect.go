@@ -168,7 +168,7 @@ func holdingsOf(ctx context.Context, tx db.Tx, principal string) ([]string, bool
 		if err := json.Unmarshal(r.Body, &h); err != nil {
 			return nil, false, err
 		}
-		if h.Holder == principal {
+		if h.Holder == principal && !h.BackfillPending { // awaiting a reconfirmation: not available (T9d)
 			units = append(units, h.Unit)
 			admin = admin || h.SystemRole == "authorization_admin"
 		}

@@ -50,6 +50,10 @@ type confirmIn struct {
 	Basis            string       `json:"basis,omitempty"`      // holding (the default) or deployment_owner
 	ExpiresAt        string       `json:"expires_at,omitempty"` // an owner's confirmation: as signed
 	Signature        string       `json:"signature,omitempty"`  // an owner's confirmation
+	// an account's status change (accountchange.go): the account, the status it takes, the version it is made on
+	Account            string `json:"account,omitempty"`
+	TargetState        string `json:"target_state,omitempty"`
+	TargetStateVersion *int64 `json:"target_state_version,omitempty"`
 }
 
 func (m *Module) confirmHTTP(c *httpx.Context) error {
@@ -57,10 +61,17 @@ func (m *Module) confirmHTTP(c *httpx.Context) error {
 	if err := c.BindJSON(&in); err != nil {
 		return err
 	}
-	if in.Disposition != "" || in.Plan != "" { // a release's confirmation, under the release operation; a plan's, under change
+	// a release's confirmation, under the release operation; a plan's, under change; an account's, under tighten for a
+	// disablement or a freeze (admitted on a stale view like any tightening) and under change for a re-enable
+	if in.Disposition != "" || in.Plan != "" || in.Account != "" {
 		op, confirm := OpRelease, m.confirmDisposition
-		if in.Plan != "" {
+		switch {
+		case in.Plan != "":
 			op, confirm = OpChange, m.confirmPlan
+		case in.Account != "" && in.TargetState == "active":
+			op, confirm = OpChange, m.confirmAccount
+		case in.Account != "":
+			op, confirm = OpTighten, m.confirmAccount
 		}
 		s, _ := sdkauthz.From(c.Ctx())
 		ctx, _, err := s.Check(c.Ctx(), op, sdkauthz.Facts{})
@@ -115,6 +126,9 @@ func (m *Module) ownerPayloadHTTP(c *httpx.Context) error {
 		}
 		return c.JSON(200, map[string]any{"deployment": o.Deployment, "target": o.Target, "expires_at": o.ExpiresAt,
 			"expected_revision": o.ExpectedRevision})
+	}
+	if account := c.Query("account"); account != "" { // an account's status change: the account, the status at a version
+		return m.accountPayloadHTTP(c, account)
 	}
 	in := confirmIn{Target: c.Query("target")}
 	if v := c.Query("expected_revision"); v != "" {
@@ -440,7 +454,7 @@ func (m *Module) judgeConfirmation(ctx context.Context, tx db.Tx, id string, t *
 // or one the requester itself made unavailable within the cooling-off (CP108, cooling.go).
 func (m *Module) othersAvailable(ctx context.Context, tx db.Tx, requester, object string) (bool, error) {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT body->>'holder' FROM authz_record WHERE state = 'active'
-		AND record_type = 'management_holding' AND body->>'system_role' = 'authorization_admin'
+		AND record_type = 'management_holding' AND body->>'system_role' = 'authorization_admin' AND NOT coalesce((body->>'confirmation_backfill_pending')::boolean, false)
 		AND body->>'holder' <> ALL($1)`, []string{requester, object})
 	if err != nil {
 		return false, err

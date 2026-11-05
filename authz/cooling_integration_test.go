@@ -4,6 +4,7 @@ package authz
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,10 +35,10 @@ func (e *e2e) coolingOff() {
 		}
 		return w.Bearer(who)
 	}
-	status := func(who, st string) { // the identity member changes an account; the member applies it
+	status := func(who, st string, confirmation ...string) { // the identity member changes an account; the member applies it
 		t.Helper()
 		versions[who]++
-		require.NoError(t, e.iam.set(ctx, who, st, versions[who]))
+		require.NoError(t, e.iam.setConfirmed(ctx, who, st, strings.Join(confirmation, ""), versions[who]))
 		require.Eventually(t, func() bool {
 			var got string
 			_ = admin.QueryRow(ctx, "SELECT coalesce(data->>'status', '') FROM "+itSchema+
@@ -83,15 +84,17 @@ func (e *e2e) coolingOff() {
 	assert.Equal(t, 1, auditedAction(t, admin, cool["record"], "owner_confirmation"), "every use of the owner's key is told")
 
 	// Ivan is available again (unfrozen, his identity-side disposition released): he vetoes it, though he does not
-	// manage the root (row 7)
-	status(ivan, "active")
+	// manage the root (row 7). Unfreezing an admin is protected (security 08, T9d): Alice confirms it, the identity
+	// member's status carries the confirmation; without one his holding would await a reconfirmation
+	code, c := call(t, w, sectest.Alice, "POST", "/api/authz/confirmations", map[string]any{"account": ivan, "target_state": "active"})
+	require.Equal(t, 201, code, "%v", c)
+	status(ivan, "active", c["id"].(string))
 	releaseIdentitySide(t, w, ivan, "co4r")
 	veto := func(key string, target any) (int, map[string]any) {
 		return callAs(t, bearerOf(ivan), "POST", "/api/authz/tightenings", map[string]any{"change_key": key, "direction": "tighten",
 			"termination": "cancel", "target": target, "expected_state_revision": map[string]any{"domain": "authz.record.state",
 				"value": itoa64(int64(recordOf(t, admin, target).StateRev))}})
 	}
-	var code int
 	var out map[string]any
 	require.Eventually(t, func() bool { // his account reaches the member's own view
 		code, out = veto("co5", cool["record"])

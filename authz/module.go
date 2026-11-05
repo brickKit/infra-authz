@@ -25,6 +25,7 @@ import (
 type Module struct {
 	authzv3.UnimplementedViewServiceServer
 	authzv3.UnimplementedDefinitionServiceServer
+	authzv3.UnimplementedAccountServiceServer
 	rt                   *runtime.Runtime
 	deployment, instance string
 	registryText         func() string
@@ -75,6 +76,9 @@ func New(rt *runtime.Runtime) (*Module, error) {
 	}
 	// an account whose status changed: the closure job keeps the books of what it is a source of
 	changed := func(ctx context.Context, tx db.Tx, principal string) error {
+		if err := m.accountChanged(ctx, tx, principal); err != nil { // its confirmation used; pending confirmation (T9d)
+			return err
+		}
 		if err := m.identitySignal(ctx, tx, principal); err != nil { // a freeze or a mark: a disposition (T6c)
 			return err
 		}
@@ -109,12 +113,16 @@ func (m *Module) registry() (registry, error) {
 	return m.reg, nil
 }
 
-// Services registers the family contract's two services; every component of the deployment calls them.
+// Services registers the family contract's services: every component of the deployment calls the first two, the
+// identity member the third.
 func (m *Module) Services(s *grpcx.Services) error {
 	s.Register(&authzv3.ViewService_ServiceDesc, m, map[string]grpcx.Method{
 		"Verify": {Operation: OpVerify, Callers: []string{grpcx.AnyComponent}}})
 	s.Register(&authzv3.DefinitionService_ServiceDesc, m, map[string]grpcx.Method{
 		"Submit": {Operation: OpSubmit, Callers: []string{grpcx.AnyComponent}}})
+	// the identity member asks before it changes an account's status (T9c, A134)
+	s.Register(&authzv3.AccountService_ServiceDesc, m, map[string]grpcx.Method{
+		"CheckAccountChange": {Operation: OpAccountCheck, Callers: []string{m.rt.Config.String("IAM_COMPONENT")}}})
 	return nil
 }
 
@@ -122,6 +130,7 @@ func (m *Module) Services(s *grpcx.Services) error {
 func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/changes", Operation: OpChange, Handle: m.changeHTTP})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/tightenings", Operation: OpTighten, Handle: m.tightenHTTP})
+	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/accounts/:principal/reconfirm", Operation: OpChange, Handle: m.reconfirmHTTP})
 	// admitted like a tightening (a stale source's last view does); the handler checks the operation the target needs:
 	// a saved widening's confirmation is a change, a tightening's a tightening
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/confirmations", Operation: OpTighten, Handle: m.confirmHTTP})

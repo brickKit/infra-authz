@@ -23,6 +23,7 @@
 | `authz/pending.go` | 待恢复（安全 08）：部署的授权状态，可用管理员可证明为零时进入并记下原因；读取接口 |
 | `authz/signal.go` | 身份侧处置的派生（安全 08）：应用账号状态时按转变建立或并入；解除要列出移除的证据 |
 | `authz/release.go` | 处置的解除（安全 08）：一次求完、`restore_pending`、谁能解除、绑定处置与修订的确认 |
+| `authz/accountchange.go` | 账号状态变更（安全 08、A134）：系统面 `AccountService.CheckAccountChange`（要不要确认）、应用账号状态时用掉确认或标上待补确认（`confirmation_backfill_pending`）、补确认的路由 |
 | `authz/cooling.go` | 冷静期（安全 08、A127）：所有者确认的放宽在别的管理员刚变得不可用时转为待生效；“申请人自己弄得不可用的仍算可用”（CP108）；否决 |
 | `authz/claim.go` | 安装认领（安全 08、A130）：安装时记下，认领人消耗一次 |
 | `authz/recovery.go` | 管理员恢复（安全 08、A129）：签名请求的核对、撤换、恢复、中止 |

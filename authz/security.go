@@ -30,6 +30,9 @@ type holdingBody struct {
 	Unit       string `json:"unit"`
 	Holder     string `json:"holder"`                // the platform principal
 	SystemRole string `json:"system_role,omitempty"` // authorization_admin
+	// BackfillPending is 09a's confirmation_backfill_pending: an admin account re-enabled without a valid
+	// confirmation; the holding is not available until a protected reconfirmation (T9d)
+	BackfillPending bool `json:"confirmation_backfill_pending,omitempty"`
 }
 
 type roleBody struct {
