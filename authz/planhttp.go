@@ -252,7 +252,7 @@ func (m *Module) confirmPlan(ctx context.Context, tx db.Tx, confirmer string, in
 	}
 	until := *p.ExpiresAt
 	o := sdkauthz.OwnerConfirmation{Deployment: m.deployment, Target: p.ID, ExpectedRevision: in.PlanDigest, ExpiresAt: canon.Time(until)}
-	basis, who, until, err := m.confirmerBasis(ctx, tx, confirmer, in, o, until)
+	basis, who, until, err := m.confirmerBasis(ctx, tx, confirmer, in, o, until, false)
 	if err != nil {
 		return "", time.Time{}, err
 	}

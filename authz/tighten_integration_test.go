@@ -9,6 +9,7 @@ import (
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
+	authzv3 "github.com/brickKit/contract-infra-authz/v3/gen/go/be/authz/v3"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,10 +19,12 @@ import (
 // D_src_high (3 s) and it, short enough to wait past it.
 const itTight = 10 * time.Second
 
-// Grace and Heidi join after the identity phase (it changed the accounts of Bob, Carol, Dave and Eve).
+// Grace and Heidi join after the identity phase (it changed the accounts of Bob, Carol, Dave and Eve); Paula is an
+// ordinary account whose disablement the identity member asks about.
 const (
 	grace = "0190f3a1-0000-7000-8000-0000000000f7"
 	heidi = "0190f3a1-0000-7000-8000-0000000000f8"
+	paula = "0190f3a1-0000-7000-8000-0000000000e9"
 )
 
 // bearer is who's token after the identity phase: Bob's account is at security version 2 since.
@@ -52,7 +55,7 @@ func (e *e2e) staleTightening() {
 	t, w, admin, ctx, root := e.t, e.w, e.admin, e.ctx, e.root
 	seg := []sdkauthz.Segment{orderSeg(region("east"))}
 	e.iam, e.stopIAM = startIAM(t, w, e.pgPassword, e.busURL, false)
-	for _, p := range []string{grace, heidi} {
+	for _, p := range []string{grace, heidi, paula} {
 		require.NoError(t, e.iam.set(ctx, p, "active", 1))
 	}
 	revoke := func(key string, target any, ids ...any) (int, map[string]any) {
@@ -88,8 +91,12 @@ func (e *e2e) staleTightening() {
 	for i := range g {
 		g[i] = submitChange(t, w, sectest.Alice, grantReq("st-g"+itoa64(int64(i)), root, grace, seg), 200)
 	}
-	// Bob confirms ending the sub-unit while the source answers: attached later, he must be proven then (row 22)
+	// Bob confirms ending the sub-unit while the source answers: attached later, he must be proven then (row 22); so
+	// does his confirmation of disabling Heidi's account, an admin's (CP92)
 	subByBob := confirmAs(t, w, sectest.Bob, sub["record"], "1")
+	code, heidiByBob := callAs(t, bearer(w, sectest.Bob), "POST", "/api/authz/confirmations", map[string]any{"account": heidi,
+		"target_state": "disabled", "target_state_version": 1}) // her status may not be projected yet: the version named
+	require.Equal(t, 201, code, "%v", heidiByBob)
 
 	// a confirmation needs the operation of what it confirms: Heidi, an authorization admin who may read and tighten
 	// records but not change them, confirms a tightening, not a saved widening
@@ -172,6 +179,35 @@ func (e *e2e) staleTightening() {
 	assert.Equal(t, "ended", recordOf(t, admin, g[1]["record"]).State)
 	_, basis = lastAudit(t, admin, g[1]["record"])
 	assert.Equal(t, "not_proven_latest", basis)
+	// an account's status beyond T_tight (A134): the identity member asks for a second person; Bob, judged by the last
+	// applied facts, confirms disabling an ordinary account (CP80's account form); an admin's account needs a
+	// confirmer proven now: not provable, nothing is decided and the identity member answers processing (CP92)
+	accounts := authzv3.NewAccountServiceClient(dial(t, w, iamID))
+	accountCheck := func(account, conf string) authzv3.AccountChangeVerdict {
+		t.Helper()
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		out, err := accounts.CheckAccountChange(cctx, &authzv3.CheckAccountChangeRequest{Account: account, TargetState: "disabled",
+			SecurityVersion: 1, Requester: sectest.Alice, Confirmation: conf, SecondPerson: true})
+		require.NoError(t, err)
+		return out.GetVerdict()
+	}
+	byBobFor := func(account string) string {
+		t.Helper()
+		code, out := callAs(t, bearer(w, sectest.Bob), "POST", "/api/authz/confirmations", map[string]any{"account": account,
+			"target_state": "disabled"})
+		require.Equal(t, 201, code, "%v", out)
+		return out["id"].(string)
+	}
+	assert.Equal(t, authzv3.AccountChangeVerdict_ACCOUNT_CHANGE_VERDICT_CONFIRMATION_REQUIRED, accountCheck(paula, ""))
+	assert.Equal(t, authzv3.AccountChangeVerdict_ACCOUNT_CHANGE_VERDICT_ALLOWED, accountCheck(paula, byBobFor(paula)), "CP80")
+	code, out = callAs(t, bearer(w, sectest.Bob), "POST", "/api/authz/confirmations", map[string]any{"account": heidi,
+		"target_state": "disabled"})
+	assert.Equal(t, 503, code, "an admin's account: the confirmer must be proven now (CP92): %v", out)
+	assert.Equal(t, "AUTHORIZATION_UNPROVABLE", out["reason"])
+	assert.Equal(t, authzv3.AccountChangeVerdict_ACCOUNT_CHANGE_VERDICT_UNPROVABLE, accountCheck(heidi, heidiByBob["id"].(string)),
+		"made while Bob was proven, judged now: not provable, nothing decided (CP92)")
+
 	// the deployment owner stands in for the second person (AT64)
 	byOwner := ownerConfirm(t, w, sectest.Alice, g[2]["record"], "1")
 	code, out = revoke("st8", g[2]["record"], byOwner["id"])

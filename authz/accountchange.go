@@ -66,8 +66,15 @@ func (m *Module) confirmAccount(ctx context.Context, tx db.Tx, confirmer string,
 	if version < 1 {
 		return "", time.Time{}, errs.New(errs.ReasonRequestInvalid, "no status of this account is known: name target_state_version")
 	}
+	// row 22's exemption, as when the confirmation is judged: an ordinary account's tightening may be confirmed on the
+	// last applied facts; an admin's account, or a re-enable, by a confirmer proven now (CP80, CP92)
+	admin, err := administrator(ctx, tx, in.Account)
+	if err != nil {
+		return "", time.Time{}, err
+	}
 	until := time.Now().Add(ConfirmationValidity)
-	basis, who, until, err := m.confirmerBasis(ctx, tx, confirmer, in, m.accountBinding(in.Account, in.TargetState, version, until), until)
+	basis, who, until, err := m.confirmerBasis(ctx, tx, confirmer, in, m.accountBinding(in.Account, in.TargetState, version, until), until,
+		!admin && in.TargetState != "active")
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -163,10 +170,13 @@ func (m *Module) accountVerdict(ctx context.Context, tx db.Tx, in *authzv3.Check
 		}
 		return authzv3.AccountChangeVerdict_ACCOUNT_CHANGE_VERDICT_ALLOWED, "", nil
 	}
-	// row 22's exemption: for an account that is no admin, the second person is judged by the last applied facts
-	switch ok, err := m.confirmerEligible(ctx, tx, c.confirmer, !admin); {
+	// row 22's exemption: for a tightening of an account that is no admin, the second person is judged by the last
+	// applied facts (CP80); an admin's account needs a confirmer proven now, and one not provable decides nothing (CP92)
+	switch ok, err := m.confirmerEligible(ctx, tx, c.confirmer, !admin && in.GetTargetState() != "active"); {
 	case err != nil:
 		return 0, "", err
+	case ok == unprovable:
+		return authzv3.AccountChangeVerdict_ACCOUNT_CHANGE_VERDICT_UNPROVABLE, "the confirmer's eligibility cannot be proven now", nil
 	case ok != proven:
 		return refused("the confirmer is not a qualified authorization admin now")
 	}

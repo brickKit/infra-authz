@@ -25,7 +25,7 @@
 
 身份成员冻结一个账号，或把它标为被盗、可疑并停用时，本组件应用这个状态的同时建立一条全局的处置（暂停这个人的全部段，他的生效记录转为暂停）；同一账号再有冻结或标记并入这条处置。身份侧解冻不解除它；解除要由根单元的管理者列出要移除的证据（`signal_refs`，形如 `<账号>@<状态修订>`），全部移除才真正解除。第一次见到就已冻结的账号不算转变。
 
-账号状态变更（3.0.25 起）：身份成员停用、冻结、启用、解冻一个账号之前问本组件（系统面 `AccountService.CheckAccountChange`）：账号是授权管理员时一律要另一名授权管理员确认（`POST /api/authz/confirmations` 带 `account` 与 `target_state`，确认绑定账号、目标状态与变更前的安全状态版本）；普通账号只在身份成员要第二人时（它的依据过旧）才要。部署所有者的确认对停用、冻结随时可以代替，对启用只在没有别的可用管理员时可以。身份成员把确认 ID 随账号状态发来，本组件应用状态时把它用掉。管理员账号在身份产品里被直接重新启用、没有带确认时，他的管理员持有资格待补确认、不可用，直到另一名管理员确认后调 `POST /api/authz/accounts/{principal}/reconfirm`。
+账号状态变更（3.0.25 起）：身份成员停用、冻结、启用、解冻一个账号之前问本组件（系统面 `AccountService.CheckAccountChange`）：账号是授权管理员时一律要另一名授权管理员确认（`POST /api/authz/confirmations` 带 `account` 与 `target_state`，确认绑定账号、目标状态与变更前的安全状态版本）；普通账号只在身份成员要第二人时（它的依据过旧）才要，这时确认人可以按身份来源最后已应用的事实判断；管理员账号的确认人要此刻可证明，证明不了时什么也不定（建立确认答 503 `AUTHORIZATION_UNPROVABLE`，核对答 `UNPROVABLE`，3.0.26 起），来源恢复后再办。部署所有者的确认对停用、冻结随时可以代替，对启用只在没有别的可用管理员时可以。身份成员把确认 ID 随账号状态发来，本组件应用状态时把它用掉。管理员账号在身份产品里被直接重新启用、没有带确认时，他的管理员持有资格待补确认、不可用，直到另一名管理员确认后调 `POST /api/authz/accounts/{principal}/reconfirm`。
 
 可证明没有可用的授权管理员时（最后一名被处置、账号被停用等），部署进入待恢复（`GET /api/authz/admin-state`）：新建或扩大管理单元、授出管理持有资格一律答 `RECOVERY_IN_PROGRESS`，普通授予与收紧照常；只能由部署所有者做管理员恢复退出：在部署机上用离线的恢复私钥运行 `recover`（`-action replace -holding <持有资格>` 暂停被盗的管理员，`-action restore -identity <主体>` 恢复一名管理员，`-action abort` 中止），请求发到 `POST /api/authz/recovery`，每个请求只能用一次。恢复会推进授权恢复代次，各组件丢弃旧视图。
 
@@ -35,7 +35,7 @@
 
 管理单元（3.0.21 起）必须写明 `management_actions`（`grant`、`revoke`、`edit_role`、`bind_role`、`delegate_management`、`share_governance` 中的几项）与 `max_subdelegation_depth`（下面还能再分几层）：持有单元的人在它及以下只能做它与它以上每个单元都列出的动作；子单元的动作不多于父单元、层数小于父单元；根单元的层数是 `AUTHZ_MAX_UNIT_DEPTH`（起始 6）。
 
-3.0.25 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
+3.0.26 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：
 - 严格路径（A、B 档）；
 - 成员切换；
 - 共享、委托与扮演；
@@ -87,7 +87,7 @@
 
 ## 契约索引
 
-- 系统面：`contract-infra-authz` 的 `be.authz.v3.ViewService/Verify`、`be.authz.v3.DefinitionService/Submit` 与 `be.authz.v3.AccountService/CheckAccountChange`（alpha.3 起，只许身份成员）。成员的义务写在那个仓库的 README 里。
+- 系统面：`contract-infra-authz` 的 `be.authz.v3.ViewService/Verify`、`be.authz.v3.DefinitionService/Submit` 与 `be.authz.v3.AccountService/CheckAccountChange`（alpha.3 起，只许身份成员；`UNPROVABLE` 的回答 alpha.4 起）。成员的义务写在那个仓库的 README 里。
 - 用户面：
 
   | 路由 | 操作 | 说明 |

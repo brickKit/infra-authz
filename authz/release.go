@@ -244,10 +244,10 @@ func (m *Module) dispositionConfirmations(ctx context.Context, tx db.Tx, list []
 // confirmerBasis checks who confirms an object that is not a record (a disposition's release, a plan): another
 // authorization admin proven now (A123), or the deployment owner's signature over o (A124); until is how long it holds.
 func (m *Module) confirmerBasis(ctx context.Context, tx db.Tx, confirmer string, in confirmIn, o sdkauthz.OwnerConfirmation,
-	until time.Time) (basis, who string, _ time.Time, err error) {
+	until time.Time, lastApplied bool) (basis, who string, _ time.Time, err error) {
 	switch in.Basis {
 	case "", basisHolding:
-		switch ok, err := m.confirmerEligible(ctx, tx, confirmer, false); {
+		switch ok, err := m.confirmerEligible(ctx, tx, confirmer, lastApplied); {
 		case err != nil:
 			return "", "", until, err
 		case ok == unprovable:
@@ -296,7 +296,7 @@ func (m *Module) confirmDisposition(ctx context.Context, tx db.Tx, confirmer str
 		return "", time.Time{}, errs.New(errs.ReasonRequestInvalid, "a release's confirmation names the disposition's revision (expected_revision)")
 	}
 	o, until := m.dispositionBinding(d)
-	basis, who, until, err := m.confirmerBasis(ctx, tx, confirmer, in, o, until)
+	basis, who, until, err := m.confirmerBasis(ctx, tx, confirmer, in, o, until, false)
 	if err != nil {
 		return "", time.Time{}, err
 	}
