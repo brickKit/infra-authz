@@ -69,6 +69,8 @@
 
 ## 实现状态
 
+3.0.31（底层先行第 4 项 T9 的级联）：be-sdk-go alpha.87（重放、恢复阶段 `replaying`、转发器停止时放弃租约）；清单的 `RECOVERY_PHASE` 加 `replaying`。
+
 3.0.30（底层先行第 4 项 T9c，A142）：整套恢复的 6.4–6.5（契约 alpha.5 的 `RecoveryService`，操作 `infra.authz.system.replay`，只许 `ops/recover`；`recoverystep.go`）：
 - `Sources`：第一次答主库时钟上的此刻并请账号状态的投影下一步补取（SDK 的 `PullSoon`），之后答水位是否不早于它（线协议 P9.35，SDK 的 `NoOlderThan`）；
 - `ReplayDeferred`：只有意图的收紧在最终状态上执行（SDK 的 `ReplayTx`，已体现与悬空同 `ReplayService`）；会结束授权管理员的持有资格（目标本身，或其下的单元）、执行后可用管理员可证明为零的，回滚不执行，那些持有资格的持有人各以一条 `recovery_review` 处置关闭（同一主体只建一条）；
