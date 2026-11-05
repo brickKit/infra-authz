@@ -13,17 +13,23 @@ import (
 // administration rather than as a query that cannot complete. Start values, to be calibrated by the representative
 // deployment's experiments. A widening over a budget is rejected (row 19), a restore over one stays held (row 26).
 const (
-	budgetGrantSegments   = 8    // segments one grant expands to
+	budgetGrantSegments   = 8    // segments one grant's "or" expands to, on one resource type and operation
 	budgetInValues        = 1000 // values in one in atom
 	budgetTreeItems       = 64   // items in one org-tree atom
 	budgetSubjectSegments = 64   // a subject's normalized segments on one resource type and operation
 	overBudget            = "over budget: "
 )
 
-// grantBudget is why one grant's segments are over a budget, "" within.
+// grantBudget is why one grant's segments are over a budget, "" within. A grant's segments are the expansion of its
+// "or" (security 07's normalization, step 4): counted on each resource type and operation, since segments of other
+// operations are not one expansion (a role of twenty operations is twenty segments and expands nothing).
 func grantBudget(segs []sdkauthz.Segment) string {
-	if len(segs) > budgetGrantSegments {
-		return fmt.Sprintf(overBudget+"%d segments in one grant (at most %d)", len(segs), budgetGrantSegments)
+	per := map[string]int{}
+	for _, s := range segs {
+		op := s.ResourceType + " " + s.Operation
+		if per[op]++; per[op] > budgetGrantSegments {
+			return fmt.Sprintf(overBudget+"more than %d segments in one grant on %s %s", budgetGrantSegments, s.ResourceType, s.Operation)
+		}
 	}
 	for _, s := range segs {
 		for dim, a := range s.Atoms {

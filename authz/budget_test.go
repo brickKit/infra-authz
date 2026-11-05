@@ -32,6 +32,13 @@ func TestGrantBudgets(t *testing.T) {
 		}
 		return out
 	}
+	ops := func(n int) []sdkauthz.Segment {
+		out := make([]sdkauthz.Segment, n)
+		for i := range out {
+			out[i] = oseg(fmt.Sprintf("demo.order.op%d", i), vals("w0"), []string{"id"}, jan, "")
+		}
+		return out
+	}
 	one := func(a sdkauthz.Atom) []sdkauthz.Segment {
 		return []sdkauthz.Segment{oseg("demo.order.read", a, []string{"id"}, jan, "")}
 	}
@@ -42,6 +49,9 @@ func TestGrantBudgets(t *testing.T) {
 	}{
 		{"8 segments", segs(budgetGrantSegments), ""},
 		{"9 segments", segs(budgetGrantSegments + 1), "segments"},
+		// the expansion of a grant's "or" (security 07's normalization, step 4): counted on one resource type and
+		// operation; a grant of many operations, one segment each, expands nothing
+		{"20 operations, one segment each", ops(20), ""},
 		{"1,000 values", one(values(budgetInValues)), ""},
 		{"1,001 values", one(values(budgetInValues + 1)), "values"},
 		{"64 tree items", one(items(budgetTreeItems)), ""},

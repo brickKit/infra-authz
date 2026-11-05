@@ -17,6 +17,61 @@ import (
 // person.
 const itPlanConfirmAbove = 3
 
+// planTest calls the plan routes as Alice.
+type planTest struct{ e *e2e }
+
+func (pt planTest) seg(r ...string) []sdkauthz.Segment {
+	return []sdkauthz.Segment{orderSeg(region(r...))}
+}
+
+func (pt planTest) grant(key, who string, r ...string) any {
+	return submitChange(pt.e.t, pt.e.w, sectest.Alice, grantReq(key, pt.e.root, who, pt.seg(r...)), 200)["record"]
+}
+
+func (pt planTest) plan(path string, body any, want int) map[string]any {
+	pt.e.t.Helper()
+	code, out := call(pt.e.t, pt.e.w, sectest.Alice, "POST", "/api/authz/plans"+path, body)
+	require.Equal(pt.e.t, want, code, "%s: %v", path, out)
+	return out
+}
+
+func (pt planTest) items(p map[string]any) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, x := range p["items"].([]any) {
+		it := x.(map[string]any)
+		out[it["item_key"].(string)] = it
+	}
+	return out
+}
+
+func (pt planTest) get(id any) map[string]any {
+	code, out := call(pt.e.t, pt.e.w, sectest.Alice, "GET", "/api/authz/plans/"+id.(string), nil)
+	require.Equal(pt.e.t, 200, code, "%v", out)
+	return out
+}
+
+func (pt planTest) until(id any, what string, ok func(map[string]any) bool) map[string]any {
+	pt.e.t.Helper()
+	var p map[string]any
+	require.Eventually(pt.e.t, func() bool { p = pt.get(id); return ok(p) }, 15*time.Second, 200*time.Millisecond, "%s: %v", what, p)
+	return p
+}
+
+func (pt planTest) states(p map[string]any) map[string]string {
+	out := map[string]string{}
+	for k, it := range pt.items(p) {
+		out[k] = it["item_state"].(string)
+	}
+	return out
+}
+
+// confirm is Judy's confirmation of a plan, bound to digest.
+func (pt planTest) confirm(id any, digest string) string {
+	code, out := call(pt.e.t, pt.e.w, judy, "POST", "/api/authz/confirmations", map[string]any{"plan": id, "plan_digest": digest})
+	require.Equal(pt.e.t, 201, code, "%v", out)
+	return out["id"].(string)
+}
+
 // item is one plan item: a change request without its key.
 func item(key string, req map[string]any) map[string]any {
 	delete(req, "change_key")
@@ -32,47 +87,9 @@ func item(key string, req map[string]any) map[string]any {
 func (e *e2e) plans() {
 	t, w, admin, ctx, root := e.t, e.w, e.admin, e.ctx, e.root
 	child := unitNamed(t, admin, "dl-child")
-	seg := func(r ...string) []sdkauthz.Segment { return []sdkauthz.Segment{orderSeg(region(r...))} }
-	grant := func(key, who string, r ...string) any {
-		return submitChange(t, w, sectest.Alice, grantReq(key, root, who, seg(r...)), 200)["record"]
-	}
-	plan := func(path string, body any, want int) map[string]any {
-		t.Helper()
-		code, out := call(t, w, sectest.Alice, "POST", "/api/authz/plans"+path, body)
-		require.Equal(t, want, code, "%s: %v", path, out)
-		return out
-	}
-	items := func(p map[string]any) map[string]map[string]any {
-		out := map[string]map[string]any{}
-		for _, x := range p["items"].([]any) {
-			it := x.(map[string]any)
-			out[it["item_key"].(string)] = it
-		}
-		return out
-	}
-	get := func(id any) map[string]any {
-		code, out := call(t, w, sectest.Alice, "GET", "/api/authz/plans/"+id.(string), nil)
-		require.Equal(t, 200, code, "%v", out)
-		return out
-	}
-	until := func(id any, what string, ok func(map[string]any) bool) map[string]any {
-		t.Helper()
-		var p map[string]any
-		require.Eventually(t, func() bool { p = get(id); return ok(p) }, 15*time.Second, 200*time.Millisecond, "%s: %v", what, p)
-		return p
-	}
-	states := func(p map[string]any) map[string]string {
-		out := map[string]string{}
-		for k, it := range items(p) {
-			out[k] = it["item_state"].(string)
-		}
-		return out
-	}
-	confirmPlan := func(id any, digest string) string {
-		code, out := call(t, w, judy, "POST", "/api/authz/confirmations", map[string]any{"plan": id, "plan_digest": digest})
-		require.Equal(t, 201, code, "%v", out)
-		return out["id"].(string)
-	}
+	pt := planTest{e}
+	seg, grant, plan, items, get, until, states, confirmPlan := pt.seg, pt.grant, pt.plan, pt.items, pt.get, pt.until, pt.states, pt.confirm
+	_ = get
 
 	// a plan of five: two that apply, one beyond its unit, one whose target is revoked after the preview, one protected
 	x, y, z := grant("pl-x", carol, "east"), grant("pl-y", carol, "west"), grant("pl-z", carol, "north")
@@ -141,6 +158,18 @@ func (e *e2e) plans() {
 	assert.EqualValues(t, 3, items(p)["d"]["attempt"])
 	assert.Equal(t, "revoked", recordOf(t, admin, z).EndReason)
 	plan("/"+id.(string)+"/cancel", nil, 409) // ended
+	e.planEnds()
+}
+
+// planEnds is the rest of T7d: a plan cancelled while it executes and before it runs, expired (CP34), a target
+// renamed after the preview, a run past the expiry, and a preview over the comparison budget.
+func (e *e2e) planEnds() {
+	t, w, admin, ctx, root := e.t, e.w, e.admin, e.ctx, e.root
+	pt := planTest{e}
+	seg, grant, plan, items, until, states := pt.seg, pt.grant, pt.plan, pt.items, pt.until, pt.states
+	var p map[string]any
+	var digest string
+	var err error
 
 	// cancelled while executing: what is to be reviewed ends (not reviewed), with the record it saved; cancelled
 	// before it runs: every item ends (plan terminated)

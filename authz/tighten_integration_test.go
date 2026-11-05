@@ -55,29 +55,12 @@ func (e *e2e) staleTightening() {
 	for _, p := range []string{grace, heidi} {
 		require.NoError(t, e.iam.set(ctx, p, "active", 1))
 	}
-	confirmBy := func(who string, target any, revision string) map[string]any {
-		t.Helper()
-		body := map[string]any{"target": target}
-		if revision != "" {
-			body["expected_revision"] = map[string]any{"domain": "authz.record.revision", "value": revision}
-		}
-		code, out := callAs(t, bearer(w, who), "POST", "/api/authz/confirmations", body)
-		require.Equal(t, 201, code, "%v", out)
-		return out
-	}
 	revoke := func(key string, target any, ids ...any) (int, map[string]any) {
 		r := tightenReq(key, target)
 		if len(ids) > 0 {
 			r["confirmation_ids"] = ids
 		}
 		return call(t, w, sectest.Alice, "POST", "/api/authz/tightenings", r)
-	}
-	auditOf := func(record any) (op, basis string) {
-		t.Helper()
-		require.NoError(t, admin.QueryRow(ctx, "SELECT operation, coalesce(changes->>'basis', '') FROM "+itSchema+
-			".be_audit_log WHERE category = 'security_change' AND target->>'id' = $1 ORDER BY ord DESC LIMIT 1",
-			record).Scan(&op, &basis))
-		return op, basis
 	}
 
 	// Bob is the second authorization admin; a unit under the root with an admin holding in it, and four ordinary
@@ -91,7 +74,7 @@ func (e *e2e) staleTightening() {
 	}, 15*time.Second, 200*time.Millisecond, "a widening once the source answers: %v", unit)
 	confirmed := func(record any) {
 		t.Helper()
-		confirmBy(sectest.Bob, record, "")
+		confirmAs(t, w, sectest.Bob, record, "")
 		require.Eventually(t, func() bool { return recordOf(t, admin, record).State == "active" }, 10*time.Second,
 			50*time.Millisecond, "confirmed by Bob: applied")
 	}
@@ -106,7 +89,7 @@ func (e *e2e) staleTightening() {
 		g[i] = submitChange(t, w, sectest.Alice, grantReq("st-g"+itoa64(int64(i)), root, grace, seg), 200)
 	}
 	// Bob confirms ending the sub-unit while the source answers: attached later, he must be proven then (row 22)
-	subByBob := confirmBy(sectest.Bob, sub["record"], "1")
+	subByBob := confirmAs(t, w, sectest.Bob, sub["record"], "1")
 
 	// a confirmation needs the operation of what it confirms: Heidi, an authorization admin who may read and tighten
 	// records but not change them, confirms a tightening, not a saved widening
@@ -124,7 +107,7 @@ func (e *e2e) staleTightening() {
 	pending := submitChange(t, w, sectest.Alice, unitReq("st3p", root, "pending", seg, []string{"demo.order.read"}), 202)
 	code, out := call(t, w, heidi, "POST", "/api/authz/confirmations", map[string]any{"target": pending["record"]})
 	require.Contains(t, []int{403, 404}, code, "a saved widening's confirmation is a change: %v", out)
-	confirmBy(heidi, g[3]["record"], "1")
+	confirmAs(t, w, heidi, g[3]["record"], "1")
 
 	// a tightening has its own operation and route: the changes refuse it
 	code, out = call(t, w, sectest.Alice, "POST", "/api/authz/changes", tightenReq("st4", g[0]["record"]))
@@ -150,7 +133,7 @@ func (e *e2e) staleTightening() {
 	require.Equal(t, 200, code, "%v", out)
 	assert.Equal(t, "last_applied", out["basis"], "the result says its basis is not proven latest")
 	assert.Equal(t, "ended", recordOf(t, admin, g[0]["record"]).State)
-	op, basis := auditOf(g[0]["record"])
+	op, basis := lastAudit(t, admin, g[0]["record"])
 	assert.Equal(t, OpTighten, op)
 	assert.Equal(t, "not_proven_latest", basis, "so does the audit")
 	// another admin's holding, the unit an admin holding sits in, or a unit above it: not on old facts alone (AT58,
@@ -182,12 +165,12 @@ func (e *e2e) staleTightening() {
 	assert.Equal(t, "awaiting_confirmation", out["outcome"])
 	assert.Equal(t, "CONFIRMATION_REQUIRED", out["reason"])
 	assert.Equal(t, "active", recordOf(t, admin, g[1]["record"]).State, "nothing saved, nothing changed")
-	byBob := confirmBy(sectest.Bob, g[1]["record"], "1")
+	byBob := confirmAs(t, w, sectest.Bob, g[1]["record"], "1")
 	code, out = revoke("st7", g[1]["record"], byBob["id"])
 	require.Equal(t, 200, code, "%v", out)
 	assert.Equal(t, "last_applied", out["basis"])
 	assert.Equal(t, "ended", recordOf(t, admin, g[1]["record"]).State)
-	_, basis = auditOf(g[1]["record"])
+	_, basis = lastAudit(t, admin, g[1]["record"])
 	assert.Equal(t, "not_proven_latest", basis)
 	// the deployment owner stands in for the second person (AT64)
 	byOwner := ownerConfirm(t, w, sectest.Alice, g[2]["record"], "1")
@@ -204,31 +187,59 @@ func (e *e2e) staleTightening() {
 		return code == 200
 	}, 10*time.Second, 200*time.Millisecond, "%v", out)
 	assert.Nil(t, out["basis"], "proven now")
-	_, basis = auditOf(g[3]["record"])
+	_, basis = lastAudit(t, admin, g[3]["record"])
 	assert.Empty(t, basis)
 
-	// what this phase made goes away: the pending unit, Heidi's grant; Grace and Heidi give up their admin holdings
-	// themselves (the cooling-off phase counts them as admins who became unavailable, not by Alice); the units. Bob
-	// stays an admin
+	e.staleCleanup(pending["record"], heidiGrant["record"], graceAdmin["record"], heidiAdmin["record"], sub["record"], unit["record"])
+}
+
+// staleCleanup takes away what the stale-tightening phase made: the pending unit, Heidi's grant; Grace and Heidi give
+// up their admin holdings themselves (the cooling-off phase counts them as admins who became unavailable, not by
+// Alice); the units. Bob stays an admin. The member's own view renews for high-risk operations at its next
+// verification: widenings go on after it.
+func (e *e2e) staleCleanup(pending, heidiGrant, graceAdmin, heidiAdmin, sub, unit any) {
+	t, w, root := e.t, e.w, e.root
+	var code int
+	var out map[string]any
 	submitChange(t, w, sectest.Alice, map[string]any{"change_key": "st10p", "direction": "tighten", "termination": "withdraw",
-		"target": pending["record"], "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}, 200)
-	submitChange(t, w, sectest.Alice, tightenReq("st10g", heidiGrant["record"]), 200)
+		"target": pending, "expected_state_revision": map[string]any{"domain": "authz.record.state", "value": "1"}}, 200)
+	submitChange(t, w, sectest.Alice, tightenReq("st10g", heidiGrant), 200)
 	for _, h := range []struct {
 		who    string
 		record any
-	}{{grace, graceAdmin["record"]}, {heidi, heidiAdmin["record"]}} {
+	}{{grace, graceAdmin}, {heidi, heidiAdmin}} {
 		require.Eventually(t, func() bool {
 			code, out = call(t, w, h.who, "POST", "/api/authz/relinquishments", tightenReq("st10-"+h.who, h.record))
 			return code == 200
 		}, 10*time.Second, 200*time.Millisecond, "%v", out)
 	}
-	submitChange(t, w, sectest.Alice, tightenReq("st11s", sub["record"]), 200)
-	submitChange(t, w, sectest.Alice, tightenReq("st11", unit["record"]), 200)
-	// the member's own view renews for high-risk operations at its next verification: widenings go on after it
+	submitChange(t, w, sectest.Alice, tightenReq("st11s", sub), 200)
+	submitChange(t, w, sectest.Alice, tightenReq("st11", unit), 200)
 	var again map[string]any
 	require.Eventually(t, func() bool {
-		code, again = call(t, w, sectest.Alice, "POST", "/api/authz/changes", grantReq("st12", root, grace, seg))
+		code, again = call(t, w, sectest.Alice, "POST", "/api/authz/changes", grantReq("st12", root, grace, []sdkauthz.Segment{orderSeg(region("east"))}))
 		return code == 200
 	}, 10*time.Second, 200*time.Millisecond, "a widening once the source answers: %v", again)
 	submitChange(t, w, sectest.Alice, tightenReq("st13", again["record"]), 200)
+}
+
+// confirmAs is a confirmation by another person, of a saved widening or (with its revision) of a tightening.
+func confirmAs(t *testing.T, w *sectest.World, who string, target any, revision string) map[string]any {
+	t.Helper()
+	body := map[string]any{"target": target}
+	if revision != "" {
+		body["expected_revision"] = map[string]any{"domain": "authz.record.revision", "value": revision}
+	}
+	code, out := callAs(t, bearer(w, who), "POST", "/api/authz/confirmations", body)
+	require.Equal(t, 201, code, "%v", out)
+	return out
+}
+
+// lastAudit is the last security change audited on a record: the operation that admitted it and its basis.
+func lastAudit(t *testing.T, admin *pgx.Conn, record any) (op, basis string) {
+	t.Helper()
+	require.NoError(t, admin.QueryRow(context.Background(), "SELECT operation, coalesce(changes->>'basis', '') FROM "+itSchema+
+		".be_audit_log WHERE category = 'security_change' AND target->>'id' = $1 ORDER BY ord DESC LIMIT 1",
+		record).Scan(&op, &basis))
+	return op, basis
 }

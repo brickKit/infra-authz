@@ -3,10 +3,13 @@
 package authz
 
 import (
+	"context"
+	"testing"
 	"time"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -49,29 +52,6 @@ func (e *e2e) coolingOff() {
 		require.Eventually(t, func() bool { return recordOf(t, admin, record).State == "active" }, 10*time.Second,
 			50*time.Millisecond, "confirmed: applied")
 	}
-	settled := func(record any) recordState { // the member's job for it has run
-		t.Helper()
-		require.Eventually(t, func() bool {
-			var busy int
-			_ = admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_work_item WHERE job = $1 AND args->>'record' = $2"+
-				" AND state <> 'done' AND run_at <= now()", JobDue, record).Scan(&busy)
-			return busy == 0
-		}, 10*time.Second, 50*time.Millisecond)
-		return recordOf(t, admin, record)
-	}
-	age := func(holders ...string) { // their admin holdings ended a day ago: outside the cooling-off
-		t.Helper()
-		_, err := admin.Exec(ctx, "UPDATE "+itSchema+".authz_record SET updated_at = now() - interval '25 hours'"+
-			" WHERE record_type = 'management_holding' AND state <> 'active' AND body->>'holder' = ANY($1)", holders)
-		require.NoError(t, err)
-	}
-	audited := func(record any, action string) int {
-		var n int
-		require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_audit_log WHERE target->>'id' = $1"+
-			" AND changes->>'action' = $2", record, action).Scan(&n))
-		return n
-	}
-
 	// Ivan: an authorization admin of a side unit, who may tighten records (Bob confirms both: he is available)
 	require.NoError(t, e.iam.set(ctx, ivan, "active", 1))
 	side := submitChange(t, w, sectest.Alice, unitReq("co1", root, "side", scope, ops), 202)
@@ -94,13 +74,13 @@ func (e *e2e) coolingOff() {
 	status(ivan, "security_frozen")
 	cool := submitChange(t, w, sectest.Alice, unitReq("co4", root, "cooling", scope, ops), 202)
 	ownerConfirm(t, w, sectest.Alice, cool["record"], "")
-	assert.Equal(t, "scheduled", settled(cool["record"]).State, "confirmed, but it waits out the cooling-off")
+	assert.Equal(t, "scheduled", settledRecord(t, admin, cool["record"]).State, "confirmed, but it waits out the cooling-off")
 	var until time.Time
 	require.NoError(t, admin.QueryRow(ctx, "SELECT cooling_off_until FROM "+itSchema+".authz_record WHERE id = $1",
 		cool["record"]).Scan(&until))
 	assert.WithinDuration(t, time.Now().Add(CoolingOff), until, time.Minute, "a whole cooling-off from now")
-	assert.Equal(t, 1, audited(cool["record"], "cooling_off"), "the admins are told (the audit, without a channel)")
-	assert.Equal(t, 1, audited(cool["record"], "owner_confirmation"), "every use of the owner's key is told")
+	assert.Equal(t, 1, auditedAction(t, admin, cool["record"], "cooling_off"), "the admins are told (the audit, without a channel)")
+	assert.Equal(t, 1, auditedAction(t, admin, cool["record"], "owner_confirmation"), "every use of the owner's key is told")
 
 	// Ivan is available again (unfrozen, his identity-side disposition released): he vetoes it, though he does not
 	// manage the root (row 7)
@@ -128,11 +108,11 @@ func (e *e2e) coolingOff() {
 
 	// once the cooling-off is over it takes effect, without waiting again (the clock moved by the database). Grace's
 	// and Heidi's holdings ended a day ago now: the frozen accounts alone call for the cooling-off
-	age(grace, heidi)
+	ageHoldings(t, admin, grace, heidi)
 	status(ivan, "security_frozen")
 	done := submitChange(t, w, sectest.Alice, unitReq("co9", root, "cooled", scope, ops), 202)
 	ownerConfirm(t, w, sectest.Alice, done["record"], "")
-	require.Equal(t, "scheduled", settled(done["record"]).State)
+	require.Equal(t, "scheduled", settledRecord(t, admin, done["record"]).State)
 	_, err := admin.Exec(ctx, "UPDATE "+itSchema+".authz_record SET effective_at = now(), cooling_off_until = now() WHERE id = $1",
 		done["record"])
 	require.NoError(t, err)
@@ -150,7 +130,7 @@ func (e *e2e) coolingOff() {
 	submitChange(t, w, sectest.Alice, r, 200)
 	blocked := submitChange(t, w, sectest.Alice, unitReq("co11", root, "blocked", scope, ops), 202)
 	ownerConfirm(t, w, sectest.Alice, blocked["record"], "")
-	assert.Equal(t, "awaiting_confirmation", settled(blocked["record"]).State, "an independent person must confirm")
+	assert.Equal(t, "awaiting_confirmation", settledRecord(t, admin, blocked["record"]).State, "an independent person must confirm")
 	withdraw := func(key string, record any) {
 		t.Helper()
 		submitChange(t, w, sectest.Alice, map[string]any{"change_key": key, "direction": "tighten", "termination": "withdraw",
@@ -161,7 +141,7 @@ func (e *e2e) coolingOff() {
 
 	// a day later Ivan's end no longer holds Alice back; Bob, active again and released, gives up his admin holding
 	// himself: a holding that ended within the cooling-off alone calls for it
-	age(ivan)
+	ageHoldings(t, admin, ivan)
 	status(sectest.Bob, "active")
 	releaseIdentitySide(t, w, sectest.Bob, "co14r")
 	require.Eventually(t, func() bool {
@@ -170,10 +150,38 @@ func (e *e2e) coolingOff() {
 	}, 10*time.Second, 200*time.Millisecond, "%v", out)
 	ended := submitChange(t, w, sectest.Alice, unitReq("co16", root, "after-bob", scope, ops), 202)
 	ownerConfirm(t, w, sectest.Alice, ended["record"], "")
-	assert.Equal(t, "scheduled", settled(ended["record"]).State, "Bob's holding ended a moment ago")
+	assert.Equal(t, "scheduled", settledRecord(t, admin, ended["record"]).State, "Bob's holding ended a moment ago")
 
 	// what this phase made goes away
 	withdraw("co17", ended["record"])
 	submitChange(t, w, sectest.Alice, tightenReq("co13", done["record"]), 200)
 	submitChange(t, w, sectest.Alice, tightenReq("co14", side["record"]), 200)
+}
+
+// settledRecord waits until the member's job for a record has run, and reads it.
+func settledRecord(t *testing.T, admin *pgx.Conn, record any) recordState {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var busy int
+		_ = admin.QueryRow(context.Background(), "SELECT count(*) FROM "+itSchema+".be_work_item WHERE job = $1 AND args->>'record' = $2"+
+			" AND state <> 'done' AND run_at <= now()", JobDue, record).Scan(&busy)
+		return busy == 0
+	}, 10*time.Second, 50*time.Millisecond)
+	return recordOf(t, admin, record)
+}
+
+// ageHoldings dates the ended admin holdings of these holders a day back: outside the cooling-off.
+func ageHoldings(t *testing.T, admin *pgx.Conn, holders ...string) {
+	t.Helper()
+	_, err := admin.Exec(context.Background(), "UPDATE "+itSchema+".authz_record SET updated_at = now() - interval '25 hours'"+
+		" WHERE record_type = 'management_holding' AND state <> 'active' AND body->>'holder' = ANY($1)", holders)
+	require.NoError(t, err)
+}
+
+// auditedAction counts the audit records of an action on a record.
+func auditedAction(t *testing.T, admin *pgx.Conn, record any, action string) int {
+	var n int
+	require.NoError(t, admin.QueryRow(context.Background(), "SELECT count(*) FROM "+itSchema+".be_audit_log WHERE target->>'id' = $1"+
+		" AND changes->>'action' = $2", record, action).Scan(&n))
+	return n
 }
