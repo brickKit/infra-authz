@@ -63,6 +63,7 @@ const registryTSV = "kind\tkey\towner_component\n" +
 	"permission\tinfra.authz.system.submit\tinfra/authz\n" +
 	"permission\tinfra.authz.system.account_check\tinfra/authz\n" +
 	"permission\tinfra.authz.system.claim\tinfra/authz\n" +
+	"permission\tinfra.authz.system.replay\tinfra/authz\n" +
 	"resource_type\tdemo.order\tdemo/orders\npermission\tdemo.order.read\tdemo/orders\n" +
 	"resource_type\tdemo.invoice\tdemo/invoices\npermission\tdemo.invoice.read\tdemo/invoices\n" +
 	"permission\tdemo.invoice.export\tdemo/invoices\n" +

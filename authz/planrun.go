@@ -166,7 +166,7 @@ func (m *Module) planIntent(ctx context.Context, plan string) (string, *evidence
 		return "", nil, nil
 	}
 	p, err := m.rt.Evidence.Intent(ctx, "security_tightening", "", evidence.Object{Type: Records, ID: req.Target,
-		Version: revisionValue(req.ExpectedStateRevision)}, tighteningChange(initiator, req))
+		Version: revisionValue(req.ExpectedStateRevision)}, evidenceChange(initiator, req))
 	return key, p, err
 }
 

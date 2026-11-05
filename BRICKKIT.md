@@ -35,6 +35,8 @@
 
 管理单元（3.0.21 起）必须写明 `management_actions`（`grant`、`revoke`、`edit_role`、`bind_role`、`delegate_management`、`share_governance` 中的几项）与 `max_subdelegation_depth`（下面还能再分几层）：持有单元的人在它及以下只能做它与它以上每个单元都列出的动作；子单元的动作不多于父单元、层数小于父单元；根单元的层数是 `AUTHZ_MAX_UNIT_DEPTH`（起始 6）。
 
+重放（3.0.29 起）：整套恢复第 6 步，恢复工具（`ops/recover`）经 `be.evidence.v1.ReplayService` 让本组件按证据重新施加恢复后的库里没有的收紧与放宽（操作 `infra.authz.system.replay`）：照记下的请求再进一次生效点，不重做业务前置校验，新建的记录沿用原来的身份；目标记录不在的交复核。最后管理员在全部重放之后再判断。
+
 证据（3.0.27 起，协议 15）：每次收紧在生效之前先把意图交给证据存储（审计组件的 `EvidenceService`），生效时写结论；放宽生效时写一般记录。证据存储不可达时收紧照常，意图改写进告警渠道（运行档案，配置 `RUN_PROFILE_*`），两处都写不进时记一条严重日志（`evidence_double_failure`）；结论在本地等证据存储恢复后再交。
 
 3.0.27 还没有做的，用到时答“能力不支持”（`CAPABILITY_UNSUPPORTED`）：

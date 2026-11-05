@@ -78,6 +78,10 @@ type entry struct {
 	job                    *firing
 	selfOnly               bool // a relinquishment (D82): only the requester's own record
 	planItem               bool // a plan's item: a target moved since the preview is row 17, not row 3 (planrun.go)
+	// replay is the evidence record's object of a full recovery's replay (assembly protocol 15, 6.3; replay.go): the
+	// business preconditions are not decided again, a new record takes this identity, no evidence is written and the
+	// last admin is judged after the whole replay (6.5), not here.
+	replay string
 }
 
 // operation is the operation that admitted the entry, for its audit: a relinquishment, a tightening, or a change (a
@@ -157,7 +161,7 @@ func (m *Module) changeAs(ctx context.Context, requester string, req request, se
 	var pending *evidence.Pending
 	if req.Direction == Tighten && m.rt.Evidence != nil {
 		if pending, err = m.rt.Evidence.Intent(ctx, "security_tightening", "", evidence.Object{Type: Records,
-			ID: req.Target, Version: revisionValue(req.ExpectedStateRevision)}, tighteningChange(requester, req)); err != nil {
+			ID: req.Target, Version: revisionValue(req.ExpectedStateRevision)}, evidenceChange(requester, req)); err != nil {
 			return changeResult{}, err
 		}
 	}
@@ -195,9 +199,13 @@ func revisionValue(r *revisionRef) string {
 	return r.Value
 }
 
-// tighteningChange is what a tightening's evidence records: the change itself (P12.9), never the resulting state.
-func tighteningChange(requester string, req request) map[string]any {
+// evidenceChange is what a change's evidence records: the change itself (P12.9), never the resulting state; with the
+// candidate and the effective time, so that a full recovery's replay applies it again (replay.go).
+func evidenceChange(requester string, req request) map[string]any {
 	c := map[string]any{"direction": req.Direction, "requested_by": requester, "change_key": req.ChangeKey}
+	if req.EffectiveFrom != "" {
+		c["effective_from"] = req.EffectiveFrom
+	}
 	if req.Termination != "" {
 		c["termination"] = req.Termination
 	}
@@ -246,7 +254,10 @@ func (m *Module) effect(ctx context.Context, tx db.Tx, e entry) (changeResult, v
 	var p plan
 	if f.Key == keyFree {
 		var pre *changeResult
-		if f, p, pre, err = m.factsOf(ctx, tx, e); err != nil || pre != nil {
+		if f, p, pre, err = m.factsOf(ctx, tx, e); err == nil && pre == nil && e.replay != "" {
+			f = replayFacts(f)
+		}
+		if err != nil || pre != nil {
 			if pre != nil {
 				pre.ChangeKey = e.key
 				err = m.bindPre(ctx, tx, e, pre)
@@ -268,15 +279,17 @@ func (m *Module) effect(ctx context.Context, tx db.Tx, e entry) (changeResult, v
 	if err != nil {
 		return res, v, err
 	}
-	if res.Outcome == "applied" && (e.req.Direction == Widen || e.req.Direction == "release") && m.rt.Evidence != nil {
-		// a widening (a release restores access too), in its transaction
+	if res.Outcome == "applied" && (e.req.Direction == Widen || e.req.Direction == "release") && m.rt.Evidence != nil &&
+		e.replay == "" {
+		// a widening (a release restores access too), in its transaction, with what a replay applies again
+		c := evidenceChange(e.requester, e.req)
+		c["direction"], c["trigger"], c["change_key"] = Widen, e.trigger, e.key
 		if _, err := m.rt.Evidence.General(ctx, tx, "security_widening", "", evidence.Object{Type: Records, ID: res.Record,
-			Version: revisionValue(res.NewRevision)}, map[string]any{"direction": Widen, "requested_by": e.requester,
-			"trigger": e.trigger, "change_key": e.key}); err != nil {
+			Version: revisionValue(res.NewRevision)}, c); err != nil {
 			return res, v, err
 		}
 	}
-	if res.Outcome == "applied" && f.AffectsAdmins { // an admin may have become unavailable (T6e)
+	if res.Outcome == "applied" && f.AffectsAdmins && e.replay == "" { // an admin may have become unavailable (T6e)
 		if err := m.judgeAdmins(ctx, tx); err != nil {
 			return res, v, err
 		}

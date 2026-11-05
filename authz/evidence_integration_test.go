@@ -4,11 +4,15 @@ package authz
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
+	"github.com/brickKit/be-sdk-go/v3/evidence"
+	"github.com/brickKit/be-sdk-go/v3/ids"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -109,4 +113,102 @@ func TestChangesLeaveEvidence(t *testing.T) {
 	require.Eventually(t, func() bool { return len(evidenceFor(w, rec2)["effective"]) == 1 }, 10*time.Second,
 		100*time.Millisecond, "sent once the store is back")
 	assert.Empty(t, evidenceFor(w, rec2)["intent"], "no store, no alert channel: the intent was a double failure")
+}
+
+// TestTheReplayAppliesTheEvidenceAgain is item 4's T9c (be-protocol P12.19-P12.21, assembly protocol 15's 6.3): a
+// grant and its revocation, then the database put back to before both (a restore to T); the recovery tool replays
+// them in their commit order: the grant comes back under its own identity, the revocation ends it again, each once
+// (again: reflected). A revocation of a record that is gone is dangling.
+func TestTheReplayAppliesTheEvidenceAgain(t *testing.T) {
+	e := startE2E(t)
+	w, ctx, admin := e.w, e.ctx, e.admin
+	seg := []sdkauthz.Segment{{ResourceType: Records, Operation: OpRead, Atoms: map[string]sdkauthz.Atom{Holder: {Kind: "all"}},
+		ReadFields: []string{"id"}, Valid: sdkauthz.Window{From: "2026-01-01T00:00:00.000000Z"}}}
+	units := listRecords(t, w, sectest.Alice, "management_unit")
+	require.Len(t, units, 1)
+	g := submitChange(t, w, sectest.Alice, grantReq("rp-g1", units[0]["id"].(string), sectest.Bob, seg), 200)
+	rec := g["record"].(string)
+	code, out := call(t, w, sectest.Alice, "POST", "/api/authz/tightenings", tightenReq("rp-t1", rec))
+	require.Equal(t, 200, code, "%v", out)
+	var got map[string][]map[string]any
+	require.Eventually(t, func() bool { got = evidenceFor(w, rec); return len(got["effective"]) == 1 && len(got["general"]) == 1 },
+		10*time.Second, 100*time.Millisecond)
+	raw := func(r map[string]any) []byte {
+		for k, v := range w.Evidence() {
+			if strings.HasPrefix(k, r["id"].(string)+"/") && strings.HasSuffix(k, "/"+r["phase"].(string)) {
+				return v
+			}
+		}
+		t.Fatalf("no raw record %v", r["id"])
+		return nil
+	}
+	grant, revoke := raw(got["general"][0]), raw(got["effective"][0])
+	assert.Contains(t, string(grant), `"candidate"`, "a widening's evidence carries what a replay applies again")
+
+	// the database as it was before both: the record, its index and the two changes' bindings and history gone
+	for _, q := range []string{
+		"DELETE FROM " + itSchema + ".authz_dependency WHERE record = $1",
+		"DELETE FROM " + itSchema + ".authz_change WHERE result->>'record' = $1",
+		"DELETE FROM " + itSchema + ".authz_record WHERE id = $1",
+	} {
+		_, err := admin.Exec(ctx, q, rec)
+		require.NoError(t, err, q)
+	}
+	for _, r := range []map[string]any{got["general"][0], got["effective"][0]} {
+		_, err := admin.Exec(ctx, "DELETE FROM "+itSchema+".be_change_history WHERE evidence_id = $1", r["id"])
+		require.NoError(t, err)
+	}
+	client := evidence.ReplayClient{Conn: dial(t, w, "ops/recover")}
+	replay := func(b []byte) string {
+		t.Helper()
+		outcome, detail, err := client.Replay(ctx, b, "r1")
+		require.NoError(t, err)
+		require.NotEmpty(t, outcome, detail)
+		return outcome
+	}
+	assert.Equal(t, evidence.Applied, replay(grant), "the grant again, in commit order first")
+	assert.Equal(t, "active", recordOf(t, admin, rec).State, "under its own identity")
+	assert.Equal(t, evidence.Applied, replay(revoke), "then its revocation")
+	assert.Equal(t, "ended", recordOf(t, admin, rec).State)
+	assert.Equal(t, evidence.AlreadyReflected, replay(grant))
+	assert.Equal(t, evidence.AlreadyReflected, replay(revoke))
+	history := func() []string {
+		rows, err := admin.Query(ctx, "SELECT evidence_id::text FROM "+itSchema+".be_change_history WHERE object_id = $1", rec)
+		require.NoError(t, err)
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		require.NoError(t, err)
+		return ids
+	}
+	assert.ElementsMatch(t, []string{got["general"][0]["id"].(string), got["effective"][0]["id"].(string)}, history(),
+		"the replay writes the history under the records' own identities, no new evidence of its own")
+
+	// a revocation of a record that ended since (restored after its end, the revocation not reflected): nothing left
+	// to tighten, the replay accepts it
+	_, err := admin.Exec(ctx, "DELETE FROM "+itSchema+".be_change_history WHERE evidence_id = $1", got["effective"][0]["id"])
+	require.NoError(t, err)
+	_, err = admin.Exec(ctx, "DELETE FROM "+itSchema+".authz_change WHERE change_key = 'rp-t1'")
+	require.NoError(t, err)
+	assert.Equal(t, evidence.Applied, replay(revoke), "the record is ended already")
+	assert.Equal(t, "ended", recordOf(t, admin, rec).State)
+
+	// the business preconditions held when the change was made and are not decided again: a revocation by an admin who
+	// holds no management role any more (in the restored database, or since) is applied all the same
+	g2 := submitChange(t, w, sectest.Alice, grantReq("rp-g2", units[0]["id"].(string), sectest.Bob, seg), 200)
+	rec2 := g2["record"].(string)
+	former, err := evidence.Seal(map[string]any{"record_type": evidence.RecordType, "schema": "1.0", "id": ids.New().String(),
+		"recorder": map[string]any{"component": ID, "instance": "i"}, "category": "security_tightening", "phase": "intent",
+		"object": map[string]any{"type": Records, "id": rec2},
+		"change": map[string]any{"direction": Tighten, "requested_by": "0190f3a1-0000-7000-8000-0000000000c3",
+			"change_key": "rp-t2", "target": rec2}, "at": "2026-11-05T10:00:00.000000Z"})
+	require.NoError(t, err)
+	assert.Equal(t, evidence.Applied, replay(former.Record), "the requester's eligibility is not decided again")
+	assert.Equal(t, "ended", recordOf(t, admin, rec2).State)
+
+	gone, err := evidence.Seal(map[string]any{"record_type": evidence.RecordType, "schema": "1.0", "id": ids.New().String(),
+		"recorder": map[string]any{"component": ID, "instance": "i"}, "category": "security_tightening", "phase": "intent",
+		"object": map[string]any{"type": Records, "id": ids.New().String()},
+		"change": map[string]any{"direction": Tighten, "requested_by": sectest.Alice, "change_key": "rp-t9",
+			"target": ids.New().String()}, "at": "2026-11-05T10:00:00.000000Z"})
+	require.NoError(t, err)
+	assert.Equal(t, evidence.Dangling, replay(gone.Record))
 }

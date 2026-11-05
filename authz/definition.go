@@ -20,7 +20,7 @@ import (
 // Identity of the component.
 const (
 	ID      = "infra/authz"
-	Version = "3.0.28"
+	Version = "3.0.29"
 )
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.
@@ -47,6 +47,8 @@ const (
 	OpSubmit = "infra.authz.system.submit"
 	// OpAccountCheck is AccountService.CheckAccountChange: the identity member only (T9c)
 	OpAccountCheck = "infra.authz.system.account_check"
+	// OpReplay is the replay of this member's evidence in a full recovery (be-protocol P12.19: the recovery tool only).
+	OpReplay = "infra.authz.system.replay"
 	// OpClaim consumes the install claim: nobody is granted it, the claim itself says who may (A130)
 	OpClaim        = "infra.authz.system.claim"
 	SystemRead     = "infra.authz.system.read"
@@ -157,6 +159,7 @@ func Definitions() *sdkauthz.Definitions {
 			{Key: OpVerify, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpSubmit, ResourceType: System, Purpose: "manage", RiskClass: "low", SideEffects: []string{"security_change"}},
 			{Key: OpAccountCheck, ResourceType: System, Purpose: "read", RiskClass: "low"},
+			{Key: OpReplay, ResourceType: System, Purpose: "action", RiskClass: "high", SideEffects: []string{"business_write"}},
 			{Key: OpClaim, ResourceType: System, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
 				Audit: true},
 		}}
@@ -165,6 +168,6 @@ func Definitions() *sdkauthz.Definitions {
 // Definition is the component as the launcher and the shells take it.
 func Definition() component.Definition {
 	return component.Definition{ID: ID, Version: Version, Keys: Keys(), Migrations: migrations(), GRPCPort: GRPCPort,
-		Subscribes: true, Evidence: true, Authz: Definitions(),
+		Subscribes: true, Evidence: true, Authz: Definitions(), Replay: OpReplay,
 		New: func(rt *runtime.Runtime) (component.Module, error) { return New(rt) }}
 }

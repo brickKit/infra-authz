@@ -215,6 +215,9 @@ func (p plan) recTypeOr() string {
 // insert writes a new record in state (with its end reason when it ends at once).
 func (m *Module) insert(ctx context.Context, tx db.Tx, e entry, p plan, state, endReason, reason string) (string, error) {
 	id := ids.New().String()
+	if e.replay != "" && p.target == nil { // a replayed widening keeps its record's identity: later records name it
+		id = e.replay
+	}
 	body, err := json.Marshal(p.body)
 	if err != nil {
 		return "", err
