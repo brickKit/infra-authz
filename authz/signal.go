@@ -76,46 +76,55 @@ func (m *Module) identitySignal(ctx context.Context, tx db.Tx, principal string)
 // identityDisposition makes an identity-side disposition: the root's domain, the person's every segment, its
 // effective records held.
 func (m *Module) identityDisposition(ctx context.Context, tx db.Tx, principal, ref string) error {
-	units, err := m.units(ctx, tx)
-	if err != nil {
-		return err
-	}
-	root := ""
-	for id, u := range units {
-		if u.Root && u.id == id {
-			root = id
-		}
-	}
-	if root == "" {
-		return nil // no management yet (before the install claim): nothing to hold
-	}
-	held, err := m.inScope(ctx, tx, units, dispositionIn{Subject: principal, All: true}, root)
-	if err != nil {
-		return err
-	}
-	id, change := ids.New().String(), ID+":identity_signal:"+ref
-	if _, err := tx.Exec(ctx, `INSERT INTO authz_disposition (id, state, origin, subject, accounts, suspended_segments,
-		all_scope, domain, signal_ref, change) VALUES ($1, 'active', 'identity_side', $2, $3, '[]', true, $4, $5, $6)`,
-		id, principal, []string{principal}, root, []string{ref}, change); err != nil {
-		return err
-	}
-	for _, r := range held {
-		if _, err := m.transition(ctx, tx, r, "held", "", "security_hold", change, ""); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "UPDATE authz_record SET disposition = $2 WHERE id = $1", r, id); err != nil {
-			return err
-		}
-	}
-	if err := advance(ctx, tx); err != nil {
+	id, held, err := m.globalDisposition(ctx, tx, principal, "identity_side", []string{ref}, ID+":identity_signal:"+ref)
+	if err != nil || id == "" {
 		return err
 	}
 	m.rt.Logger.Warn("an identity-side signal made a security disposition", "subject", principal, "disposition", id,
-		"held", len(held))
+		"held", held)
 	_, err = m.rt.Audit.Write(ctx, tx, audit.Record{Category: audit.SecurityChange, Operation: OpDispose,
 		Outcome: audit.Succeeded, Actor: ID, Target: map[string]any{"type": dispositionType, "id": id},
-		Changes: map[string]any{"origin": "identity_side", "signal_ref": ref, "held": len(held)}})
+		Changes: map[string]any{"origin": "identity_side", "signal_ref": ref, "held": held}})
 	return err
+}
+
+// globalDisposition makes a disposition of the deployment's whole domain (the root): the person's every segment,
+// its effective records held, the security revision advanced. No root yet (before the install claim): nothing to
+// hold, no disposition (id empty).
+func (m *Module) globalDisposition(ctx context.Context, tx db.Tx, principal, origin string, refs []string, change string) (
+	id string, held int, err error) {
+	units, err := m.units(ctx, tx)
+	if err != nil {
+		return "", 0, err
+	}
+	root := ""
+	for uid, u := range units {
+		if u.Root && u.id == uid {
+			root = uid
+		}
+	}
+	if root == "" {
+		return "", 0, nil
+	}
+	recs, err := m.inScope(ctx, tx, units, dispositionIn{Subject: principal, All: true}, root)
+	if err != nil {
+		return "", 0, err
+	}
+	id = ids.New().String()
+	if _, err := tx.Exec(ctx, `INSERT INTO authz_disposition (id, state, origin, subject, accounts, suspended_segments,
+		all_scope, domain, signal_ref, change) VALUES ($1, 'active', $2, $3, $4, '[]', true, $5, $6, $7)`,
+		id, origin, principal, []string{principal}, root, nonNil(refs), change); err != nil {
+		return "", 0, err
+	}
+	for _, r := range recs {
+		if _, err := m.transition(ctx, tx, r, "held", "", "security_hold", change, ""); err != nil {
+			return "", 0, err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE authz_record SET disposition = $2 WHERE id = $1", r, id); err != nil {
+			return "", 0, err
+		}
+	}
+	return id, len(recs), advance(ctx, tx)
 }
 
 // releaseSignals is a release's part for an identity-side disposition: it names the signal records to remove; while

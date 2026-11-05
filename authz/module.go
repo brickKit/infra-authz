@@ -26,6 +26,7 @@ type Module struct {
 	authzv3.UnimplementedViewServiceServer
 	authzv3.UnimplementedDefinitionServiceServer
 	authzv3.UnimplementedAccountServiceServer
+	authzv3.UnimplementedRecoveryServiceServer
 	rt                   *runtime.Runtime
 	deployment, instance string
 	registryText         func() string
@@ -114,7 +115,7 @@ func (m *Module) registry() (registry, error) {
 }
 
 // Services registers the family contract's services: every component of the deployment calls the first two, the
-// identity member the third.
+// identity member the third, the recovery tool the fourth.
 func (m *Module) Services(s *grpcx.Services) error {
 	s.Register(&authzv3.ViewService_ServiceDesc, m, map[string]grpcx.Method{
 		"Verify": {Operation: OpVerify, Callers: []string{grpcx.AnyComponent}}})
@@ -123,6 +124,12 @@ func (m *Module) Services(s *grpcx.Services) error {
 	// the identity member asks before it changes an account's status (T9c, A134)
 	s.Register(&authzv3.AccountService_ServiceDesc, m, map[string]grpcx.Method{
 		"CheckAccountChange": {Operation: OpAccountCheck, Callers: []string{m.rt.Config.String("IAM_COMPONENT")}}})
+	// a full recovery's 6.4-6.5 after the replay (recoverystep.go, A142): the replay's operation, the tool only
+	tool := []string{RecoveryTool}
+	s.Register(&authzv3.RecoveryService_ServiceDesc, m, map[string]grpcx.Method{
+		"Sources":        {Operation: OpReplay, Callers: tool},
+		"ReplayDeferred": {Operation: OpReplay, Callers: tool, Orchestration: true},
+		"Check":          {Operation: OpReplay, Callers: tool, Orchestration: true}})
 	return nil
 }
 

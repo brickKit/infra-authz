@@ -224,7 +224,7 @@ func (m *Module) recoveryRestore(ctx context.Context, tx db.Tx, r RecoveryReques
 		return err
 	}
 	rows, err := tx.Query(ctx, `SELECT d.id::text FROM authz_disposition d WHERE d.state = 'active' AND d.subject = $1
-		AND (d.origin = 'identity_side' OR d.disposer IN (SELECT subject FROM authz_disposition WHERE origin = 'admin_recovery'
+		AND (d.origin IN ('identity_side', 'recovery_review') OR d.disposer IN (SELECT subject FROM authz_disposition WHERE origin = 'admin_recovery'
 			AND state = 'active'))`, r.Identity)
 	if err != nil {
 		return err
