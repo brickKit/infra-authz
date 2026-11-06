@@ -108,6 +108,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	e.handover()
 	e.plans()
 	e.identitySide()
+	e.identitySideRecovery()
 	e.lastAdmin()
 	e.pending()
 	e.recovery()

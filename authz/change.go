@@ -284,6 +284,10 @@ func (m *Module) effect(ctx context.Context, tx db.Tx, e entry) (changeResult, v
 		// a widening (a release restores access too), in its transaction, with what a replay applies again
 		c := evidenceChange(e.requester, e.req)
 		c["direction"], c["trigger"], c["change_key"] = Widen, e.trigger, e.key
+		if r := e.req.Release; r != nil { // a release: which disposition and the signals it removes (T13b)
+			c["direction"] = "release"
+			c["release"] = map[string]any{"disposition": r.Disposition, "signal_refs": nonNil(r.SignalRefs)}
+		}
 		if _, err := m.rt.Evidence.General(ctx, tx, "security_widening", "", evidence.Object{Type: Records, ID: res.Record,
 			Version: revisionValue(res.NewRevision)}, c); err != nil {
 			return res, v, err

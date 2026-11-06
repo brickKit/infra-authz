@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/evidence"
@@ -45,6 +46,13 @@ func (m *Module) replay(ctx context.Context, tx db.Tx, rec evidence.Replayed) er
 	}
 	req := request{ChangeKey: key}
 	req.Direction, _ = rec.Change["direction"].(string)
+	if rel, ok := rec.Change["release"].(map[string]any); ok { // a disposition's release (T13b)
+		in, err := replayedRelease(ctx, tx, rel)
+		if err != nil {
+			return err
+		}
+		req.Release = in
+	}
 	req.Termination, _ = rec.Change["termination"].(string)
 	req.Target, _ = rec.Change["target"].(string)
 	req.EffectiveFrom, _ = rec.Change["effective_from"].(string)
@@ -59,7 +67,7 @@ func (m *Module) replay(ctx context.Context, tx db.Tx, rec evidence.Replayed) er
 			return err
 		}
 		req.CandidateDigest = candidateDigest(c.RecordType, raw) // the digest is of the content (its canonical form)
-	} else if req.Direction == Widen {
+	} else if req.Direction == Widen && req.Release == nil {
 		return errors.New("a widening recorded without its candidate (before 3.0.29): for review")
 	}
 	if req.Target != "" { // the record the change acts on must still exist
@@ -95,4 +103,43 @@ func (m *Module) replay(ctx context.Context, tx db.Tx, rec evidence.Replayed) er
 		}
 	}
 	return fmt.Errorf("the replay did not apply: %s %s (row %d)", res.Outcome, res.Detail, v.Row)
+}
+
+// replayedRelease is a recorded release as the effect point takes it again. An identity-side release is matched by
+// the signals it names, not by the disposition's identity: a full recovery derives the disposition again from the
+// replayed account status, under another identity (security 08, "身份侧处置的派生"). While a signal it names is in no
+// active identity-side disposition (its freeze not applied yet) it is deferred: asked again after 6.4, still missing
+// for review. The disposition's revision is the one it has now: the release's revision and confirmations were checked
+// when it was made.
+func replayedRelease(ctx context.Context, tx db.Tx, rel map[string]any) (*releaseIn, error) {
+	in := &releaseIn{}
+	in.Disposition, _ = rel["disposition"].(string)
+	if refs, ok := rel["signal_refs"].([]any); ok {
+		for _, r := range refs {
+			if s, ok := r.(string); ok {
+				in.SignalRefs = append(in.SignalRefs, s)
+			}
+		}
+	}
+	if len(in.SignalRefs) > 0 {
+		err := tx.QueryRow(ctx, `SELECT id::text FROM authz_disposition WHERE state = 'active' AND origin = 'identity_side'
+			AND signal_ref @> $1::text[]`, in.SignalRefs).Scan(&in.Disposition)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("no active identity-side disposition holds the signals %v yet: %w", in.SignalRefs,
+				evidence.ErrDeferred)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	var revision int64
+	err := tx.QueryRow(ctx, "SELECT revision FROM authz_disposition WHERE id::text = $1", in.Disposition).Scan(&revision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("disposition %s: %w", in.Disposition, evidence.ErrDangling)
+	}
+	if err != nil {
+		return nil, err
+	}
+	in.Revision = &revisionRef{Domain: dispositionDomain, Value: strconv.FormatInt(revision, 10)}
+	return in, nil
 }

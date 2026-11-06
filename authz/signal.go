@@ -29,6 +29,7 @@ func (m *Module) identitySignal(ctx context.Context, tx db.Tx, principal string)
 	var rec struct {
 		Status   string `json:"status"`
 		Mark     string `json:"security_mark"`
+		Evidence string `json:"evidence"`
 		Revision struct {
 			Value string `json:"value"`
 		} `json:"revision"`
@@ -37,7 +38,12 @@ func (m *Module) identitySignal(ctx context.Context, tx db.Tx, principal string)
 		return err
 	}
 	marked := rec.Status == "security_frozen" || rec.Status == "disabled" && (rec.Mark == "compromised" || rec.Mark == "suspicious")
+	// the signal is (the account, the evidence record that made the change: 09a's evidence), the same when the identity
+	// member replays it in a full recovery; a record without it (an older identity member) by its revision
 	ref := principal + "@" + rec.Revision.Value
+	if rec.Evidence != "" {
+		ref = principal + "@" + rec.Evidence
+	}
 	var was bool
 	var last string
 	err = tx.QueryRow(ctx, "SELECT marked, ref FROM authz_account_signal WHERE principal = $1 FOR UPDATE", principal).Scan(&was, &last)

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
+	"github.com/brickKit/be-sdk-go/v3/evidence"
+	"github.com/brickKit/be-sdk-go/v3/ids"
 	"github.com/brickKit/be-sdk-go/v3/sectest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -78,6 +80,16 @@ func (e *e2e) identitySide() {
 	require.Equal(t, 400, code, "%v", out)
 	code, out = release("is3", id, rev, max+"@2")
 	require.Equal(t, 200, code, "%v", out)
+	// its evidence says what a replay needs to release it again: the disposition and the signals (T13b)
+	var rel map[string]any
+	require.Eventually(t, func() bool {
+		for _, r := range evidenceByKey(w, "is3")["general"] {
+			rel, _ = r["change"].(map[string]any)["release"].(map[string]any)
+		}
+		return rel != nil
+	}, 10*time.Second, 100*time.Millisecond, "the release's evidence")
+	assert.Equal(t, id, rel["disposition"])
+	assert.Equal(t, []any{max + "@2"}, rel["signal_refs"])
 	_, state, _, signals = of()
 	assert.Equal(t, "active", state)
 	assert.Equal(t, []string{max + "@4"}, signals)
@@ -103,4 +115,95 @@ func (e *e2e) identitySide() {
 	var n int
 	require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".authz_disposition WHERE subject = $1", nina).Scan(&n))
 	assert.Zero(t, n)
+}
+
+// identitySideRecovery is T13b (security 08's identity-side dispositions across a full recovery; assembly protocol
+// 15's 6.3): the signal_ref is (account, the evidence record that froze or marked it), the same when the identity
+// member replays the freeze (09a's evidence, written back with the original record); a replayed release finds its
+// disposition by those refs, not by an identity a recovery re-derives; it waits (deferred) while a ref it names is
+// not applied yet, and is applied once it is; it removes only the refs it names (CP73, CP102, CP107, CP112).
+func (e *e2e) identitySideRecovery() {
+	t, w, admin, ctx := e.t, e.w, e.admin, e.ctx
+	const olga = "0190f3a1-0000-7000-8000-0000000000f7"
+	version := int64(0)
+	set := func(status, mark, evidenceID string) { // the identity member sends Olga's status; applied here
+		t.Helper()
+		version++
+		require.NoError(t, e.iam.setEvidence(ctx, olga, status, mark, evidenceID, version))
+		require.Eventually(t, func() bool {
+			var v int64
+			_ = admin.QueryRow(ctx, "SELECT version FROM "+itSchema+".be_projection WHERE projection = 'accounts' AND record_id = $1",
+				olga).Scan(&v)
+			return v == version
+		}, 10*time.Second, 100*time.Millisecond, "version %d applied", version)
+	}
+	active := func() (id string, signals []string) {
+		t.Helper()
+		_ = admin.QueryRow(ctx, "SELECT id::text, signal_ref FROM "+itSchema+".authz_disposition WHERE subject = $1 AND "+
+			"origin = 'identity_side' AND state = 'active'", olga).Scan(&id, &signals)
+		return
+	}
+	client := evidence.ReplayClient{Conn: dial(t, w, "ops/recover")}
+	release := func(disposition string, refs ...string) string { // a release as the evidence store keeps it, replayed
+		t.Helper()
+		rec, err := evidence.Seal(map[string]any{"record_type": evidence.RecordType, "schema": "1.0", "id": ids.New().String(),
+			"recorder": map[string]any{"component": ID, "instance": "i"}, "category": "security_widening", "phase": "general",
+			"position": map[string]any{"epoch": "1.1", "commit_seq": 1},
+			"object":   map[string]any{"type": Records, "id": disposition, "version": "1"},
+			"change": map[string]any{"direction": "release", "requested_by": sectest.Alice, "change_key": "rel-" + ids.New().String(),
+				"release": map[string]any{"disposition": disposition, "signal_refs": refs}},
+			"at": "2026-11-06T10:00:00.000000Z"})
+		require.NoError(t, err)
+		outcome, detail, err := client.Replay(ctx, rec.Record, "r1")
+		require.NoError(t, err)
+		require.NotEmpty(t, outcome, detail)
+		return outcome
+	}
+	r1, r4, r5, r6, r7, r8 := ids.New().String(), ids.New().String(), ids.New().String(), ids.New().String(),
+		ids.New().String(), ids.New().String()
+
+	set("active", "", "") // seen the first time: no transition
+	// CP73: frozen by the evidence record r1: a disposition keyed by it
+	set("security_frozen", "", r1)
+	d1, signals := active()
+	require.NotEmpty(t, d1)
+	assert.Equal(t, []string{olga + "@" + r1}, signals, "the signal_ref is the evidence record, not the revision")
+	// CP102: its release replayed, naming the disposition as it was before the recovery (another identity): found by
+	// its refs, released, no revision or confirmation asked again
+	assert.Equal(t, evidence.Applied, release(ids.New().String(), olga+"@"+r1))
+	d, _ := active()
+	assert.Empty(t, d, "released")
+
+	// a release whose ref is not applied yet: deferred, nothing done; applied once the freeze is
+	set("active", "", "")
+	assert.Equal(t, evidence.Deferred, release(ids.New().String(), olga+"@"+r4))
+	set("security_frozen", "", r4)
+	d4, _ := active()
+	require.NotEmpty(t, d4)
+	assert.Equal(t, evidence.Applied, release(ids.New().String(), olga+"@"+r4))
+	d, _ = active()
+	assert.Empty(t, d)
+
+	// CP112: two signals merged (a freeze, then a compromised mark), both named: removed together, released
+	set("active", "", "")
+	set("security_frozen", "", r5)
+	set("disabled", "compromised", r6)
+	_, signals = active()
+	assert.Equal(t, []string{olga + "@" + r5, olga + "@" + r6}, signals)
+	assert.Equal(t, evidence.Applied, release(ids.New().String(), olga+"@"+r5, olga+"@"+r6))
+	d, _ = active()
+	assert.Empty(t, d)
+
+	// CP107: freeze r7, unfreeze, freeze r8 merged into the same disposition; the release of r7 alone leaves r8: it
+	// stays active
+	set("active", "", "")
+	set("security_frozen", "", r7)
+	set("active", "", "")
+	set("security_frozen", "", r8)
+	d7, signals := active()
+	assert.Equal(t, []string{olga + "@" + r7, olga + "@" + r8}, signals)
+	assert.Equal(t, evidence.Applied, release(ids.New().String(), olga+"@"+r7))
+	d, signals = active()
+	assert.Equal(t, d7, d, "still active")
+	assert.Equal(t, []string{olga + "@" + r8}, signals)
 }
