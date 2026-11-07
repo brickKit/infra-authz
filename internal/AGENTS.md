@@ -22,6 +22,7 @@
 ## 共同的写法
 
 - 每个模块的函数先收 `m *core.Base`，入口包的 `Module` 持有它、登记时适配（`handler`、`job`）。
+- **记录的状态只经 `effectpoint.Transition` 写**，它按迁移表（`internal/effectpoint/lifecycle.go`，设计文档里是同一张表）核对，表外的迁移报错；插入记录的地方登记在入口的结构检查里（`authz/structure_test.go`）。
 - 一切改变授权状态的写入都经生效点（`effectpoint.Effect`）：先拿 `authz_state` 行的锁（一次一个变更），结果绑定变更键；计划的项、到点的作业、重放、解除都是一次“进入”（`effectpoint.Entry`），不另写记录。
 - 生效点改了一条记录的状态，在同一事务里调 `Base.RecordMoved`（入口设成 `plans.FollowRecord`）：计划跟着转，而生效点不依赖计划。
 - 每次变更推进状态修订（`core.Advance`）与安全修订；放宽写一般证据，收紧先写意图、生效时写结论（协议 15）。

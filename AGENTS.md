@@ -36,6 +36,7 @@
 
 | 想改 | 从这里开始 | 然后 |
 | --- | --- | --- |
+| 记录能从哪个状态到哪个状态；加一个状态或结束、暂停原因 | `docs/design.md` 的“记录的状态迁移”（与 `internal/effectpoint/lifecycle.go` 同一张表） | `effectpoint.Transition`；`TestTheDesignDocumentHasTheMoves`；`authz/structure_test.go`；迁移里 `authz_record` 的 CHECK 约束 |
 | 生效点的一个结果（决策表的一行） | `internal/core/decide.go` | 读事实的 `internal/effectpoint/facts.go`、写入的 `enact.go`；`TestTheDecisionTable`；`itest/` 的 `effectPoint`、`lifecycle` |
 | 一个维度的包含规则、原子的求交 | `internal/core/security.go`、`effective.go` | `TestContainmentRules`、`TestAtomIntersection`；安全 07 |
 | 视图的形状 | `internal/view` | 先用 SDK 的 `GRPCSource` 打开一次（`itest/` 的 `definitionsAndViews`） |

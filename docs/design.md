@@ -44,6 +44,29 @@
 
 **安全来源与恢复**（设计）：高可用部署中全部写入同步提交（D66）；收紧先在事务外写意图证据，提交后经发件表写结论（协议 15）；整套恢复时按原提交序号重放证据，重放全部结束后才判定可用管理员是否为零。
 
+## 记录的状态迁移
+
+安全记录的状态只经一处写入（`effectpoint.Transition`），它按下面这张表核对“从哪里到哪里”，表里没有的迁移是缺陷，直接报错、整个事务回滚。表照安全 08 的“状态迁移”与“结果对记录状态的作用”；代码里是同一张表（`internal/effectpoint/lifecycle.go` 的 `moves`），单元测试逐行比较这里与代码。暂停（`held`）带暂停原因、结束（`ended`）带结束原因，写成 `held/<原因>`、`ended/<原因>`；“（新记录）”是插入时的状态。收窄是新的内容修订，不是状态迁移，不在表里。
+
+| 从 | 可以到 |
+| --- | --- |
+| （新记录） | `requested`、`awaiting_confirmation`、`scheduled`、`active`、`ended/rejected` |
+| `requested` | `awaiting_confirmation`、`scheduled`、`active`、`ended/rejected`、`ended/withdrawn`、`ended/cancelled` |
+| `awaiting_confirmation` | `awaiting_confirmation`、`scheduled`、`active`、`ended/rejected`、`ended/withdrawn`、`ended/cancelled` |
+| `scheduled` | `awaiting_confirmation`、`active`、`ended/rejected`、`ended/withdrawn`、`ended/cancelled` |
+| `active` | `held/security_hold`、`held/uncomputable`、`ended/revoked`、`ended/relinquished`、`ended/superseded`、`ended/source_ended`、`ended/source_narrowed`、`ended/expired` |
+| `held/security_hold` | `active`、`held/security_hold`、`held/restore_pending`、`ended/revoked`、`ended/relinquished`、`ended/superseded`、`ended/source_ended`、`ended/source_narrowed`、`ended/expired` |
+| `held/uncomputable` | `active`、`held/security_hold`、`ended/revoked`、`ended/relinquished`、`ended/superseded`、`ended/source_ended`、`ended/source_narrowed`、`ended/expired` |
+| `held/restore_pending` | `active`、`held/security_hold`、`ended/revoked`、`ended/relinquished`、`ended/superseded`、`ended/source_ended`、`ended/source_narrowed`、`ended/expired` |
+| `ended` | — |
+
+说明：
+
+- `awaiting_confirmation` 到它自己：已保存的放宽再进生效点时确认不成立，重新保存为待确认（推进状态修订）。`scheduled` 到 `awaiting_confirmation`：管理员恢复作废它所依赖的确认，或到点时确认不成立。
+- `ended/rejected` 从已保存的记录来：作业触发的放宽（确认齐全、到点）被终局驳回，不论哪一行。
+- `held/security_hold` 到它自己：已被处置暂停的记录又被另一条处置或管理员恢复的撤换暂停。`held/restore_pending` 只从 `security_hold` 来：解除处置时没剩下有效段或超出预算。
+- `held` 的记录不经闭包作业转成 `uncomputable`：已暂停的仍算不出时保持原状。
+
 ## 命令与查询
 
 | 命令或查询 | 面 | 操作 |
@@ -68,6 +91,8 @@
 - `mdm/org`（可选）：法人与部门维度，缺时这两个维度不可用；`mdm/employee`（可选）：缺时任职关联授予不可用；`infra/audit`（可选，兼任证据存储）：收紧的意图在本地事务之外写入，缺或不可达时收紧照样生效，完整记录进入外部告警（协议 15）。内部来源按水位探测取得新鲜度（安全 03）。
 
 ## 实现状态
+
+3.0.44：记录的状态迁移是一张表（本页“记录的状态迁移”，与 `internal/effectpoint/lifecycle.go` 同一张，单元测试逐行比较），`Transition` 与新记录的插入按它核对，表外的迁移报错；入口包的结构检查守住“只有 `Transition` 写状态”与插入记录的地方；表是先在集成测试里记下全部实际迁移（25 种）、再对照安全 08 写的，那 25 种都在表里（单元测试），行为不变（装配项目的结构问题 SF05 的一部分）。
 
 3.0.43：be-sdk-go alpha.117（全系统同一个 SDK 版本；SDK 加了预占的参与方 `reserve`，线协议第 16 章）
 

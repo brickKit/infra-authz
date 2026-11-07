@@ -224,6 +224,9 @@ func insert(m *core.Base, ctx context.Context, tx db.Tx, e Entry, p plan, state,
 	if err != nil {
 		return "", err
 	}
+	if !Allowed("", "", state, endReason, "") { // a new record starts only where the table says
+		return "", refused(id, "", "", state, endReason, "")
+	}
 	var pred, end, why any
 	if p.successor != "" {
 		pred = p.successor
@@ -247,8 +250,16 @@ func insert(m *core.Base, ctx context.Context, tx db.Tx, e Entry, p plan, state,
 }
 
 // Transition moves a record to state (with its end or hold reason, and a rejection's reason), advancing its state
-// revision.
+// revision; it is the only writer of a record's state, and refuses a move the table (lifecycle.go) does not allow.
 func Transition(m *core.Base, ctx context.Context, tx db.Tx, id, state, endReason, holdReason, change, reason string) (int64, error) {
+	var fromState, fromHold string
+	if err := tx.QueryRow(ctx, `SELECT state, coalesce(hold_reason, '') FROM authz_record WHERE id = $1 FOR UPDATE`, id).
+		Scan(&fromState, &fromHold); err != nil {
+		return 0, err
+	}
+	if !Allowed(fromState, fromHold, state, endReason, holdReason) {
+		return 0, refused(id, fromState, fromHold, state, endReason, holdReason)
+	}
 	var rev int64
 	err := tx.QueryRow(ctx, `UPDATE authz_record SET state = $2, end_reason = $3, hold_reason = $4,
 		state_revision = state_revision + 1, last_change = coalesce($5, last_change), reason = coalesce($6, reason),
