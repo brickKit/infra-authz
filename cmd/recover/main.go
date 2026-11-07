@@ -23,9 +23,10 @@ import (
 	"strings"
 	"time"
 
+	adminrecovery "github.com/brickKit/infra-authz/v3/internal/adminrecovery"
+
 	"github.com/brickKit/be-sdk-go/v3/canon"
 	"github.com/brickKit/be-sdk-go/v3/seed"
-	"github.com/brickKit/infra-authz/v3/authz"
 )
 
 type list []string
@@ -60,7 +61,7 @@ func run(keyPath, deployment, action, identity, url string, holdings []string, o
 	if _, err := rand.Read(nonce); err != nil {
 		return err
 	}
-	r := authz.RecoveryRequest{Deployment: deployment, Action: action, Holdings: holdings, Identity: identity,
+	r := adminrecovery.RecoveryRequest{Deployment: deployment, Action: action, Holdings: holdings, Identity: identity,
 		Nonce: hex.EncodeToString(nonce), ExpiresAt: canon.Time(time.Now().Add(10 * time.Minute))}
 	sig, err := r.Sign(sk)
 	if err != nil {

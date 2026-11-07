@@ -8,74 +8,15 @@ package authz
 import (
 	"embed"
 	"io/fs"
-	"time"
 
-	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
+	claim "github.com/brickKit/infra-authz/v3/internal/claim"
+	core "github.com/brickKit/infra-authz/v3/internal/core"
+	effectpoint "github.com/brickKit/infra-authz/v3/internal/effectpoint"
+	plans "github.com/brickKit/infra-authz/v3/internal/plans"
+
 	"github.com/brickKit/be-sdk-go/v3/component"
 	"github.com/brickKit/be-sdk-go/v3/config"
-	"github.com/brickKit/be-sdk-go/v3/events"
 	"github.com/brickKit/be-sdk-go/v3/runtime"
-)
-
-// Identity of the component.
-const (
-	ID      = "infra/authz"
-	Version = "3.0.41"
-)
-
-// The member's own resource and operations: the security records on the user surface, the two system methods.
-const (
-	Records  = "infra.authz.security_record"
-	OpRead   = "infra.authz.security_record.read"
-	OpChange = "infra.authz.security_record.change"
-	// OpTighten revokes, narrows or ends before it takes effect a record (tightening_only, security 03): admitted on
-	// the last view of a stale source, its requester judged by the last applied facts (A125)
-	OpTighten = "infra.authz.security_record.tighten"
-	// OpRelinquish ends one's own grant or holding (D82): nobody grants it, the member's own view gives every holder a
-	// fixed segment of it
-	OpRelinquish = "infra.authz.security_record.relinquish"
-	// Dispositions (security 08's security dispositions, A128): who may dispose and release within the management
-	// limit; dispose only reduces access, release restores it
-	Dispositions = "infra.authz.security_disposition"
-	OpDispRead   = "infra.authz.security_disposition.read"
-	OpDispose    = "infra.authz.security_disposition.dispose"
-	OpRelease    = "infra.authz.security_disposition.release"
-	// Holder is the records' principal dimension (D82)
-	Holder   = "holder"
-	System   = "infra.authz.system"
-	OpVerify = "infra.authz.system.verify"
-	OpSubmit = "infra.authz.system.submit"
-	// OpAccountCheck is AccountService.CheckAccountChange: the identity member only (T9c)
-	OpAccountCheck = "infra.authz.system.account_check"
-	// OpReplay is the replay of this member's evidence in a full recovery (be-protocol P12.19: the recovery tool only).
-	OpReplay = "infra.authz.system.replay"
-	// OpRecover is a full recovery's checks (be-protocol chapter 14: the recovery tool only).
-	OpRecover = "infra.authz.system.recover"
-	// OpClaim consumes the install claim: nobody is granted it, the claim itself says who may (A130)
-	OpClaim        = "infra.authz.system.claim"
-	SystemRead     = "infra.authz.system.read"
-	GRPCPort       = 9223
-	ShardDomain    = "authz.view."
-	SecurityDomain = "authz.security.deployment"
-)
-
-// The identity member's account status, an internal source with a watermark (security 03, D64): every identity member
-// declares this stream (contract-infra-iam); the member keeps the projection Accounts of it.
-var AccountStream = events.Stream{Name: "infra.iam.account_status", Partitions: 4}
-
-const Accounts = "accounts"
-
-// Starting values of security 03's renewal and closing (D64): a view that depends on the source renews for high-risk
-// operations while its watermark is no older than SourceHigh, for ordinary reads no older than SourceRead; the
-// profile bounds what a customer may set.
-const (
-	DefaultSourceHigh = time.Minute
-	DefaultSourceRead = 10 * time.Minute
-	MaxSourceHigh     = 5 * time.Minute
-	MaxSourceRead     = time.Hour
-	// DefaultTight is T_tight (security 03's tightening-only operations): a requester judged by the last applied
-	// facts acts alone while the identity source's watermark is no older; beyond it a second person confirms
-	DefaultTight = time.Hour
 )
 
 //go:embed migrations/*.sql
@@ -99,7 +40,7 @@ func Keys() []config.Key {
 		// the install claim (A130): principal:<platform principal> or code:sha256:<hex of a one-time code>; recorded at
 		// installation, consumed once by its claimant (POST /api/authz/claim). Secret: a code's digest is the claim
 		{Name: "AUTHZ_INSTALL_CLAIM", Type: config.String, Secret: true},
-		{Name: "AUTHZ_INSTALL_CLAIM_VALIDITY", Type: config.Duration, Default: DefaultClaimValidity},
+		{Name: "AUTHZ_INSTALL_CLAIM_VALIDITY", Type: config.Duration, Default: claim.DefaultClaimValidity},
 		// the deployment owner's confirmation key (A124): an Ed25519 public key (PEM); its private key is kept offline
 		// by the owner and signs owner confirmations. Absent: no owner confirmation is accepted. Not secret: a secret
 		// key so that file:// delivers it
@@ -114,63 +55,25 @@ func Keys() []config.Key {
 		{Name: "IAM_COMPONENT", Type: config.String, Required: true},
 		// D_src_high and D_src_read (security 03): the watermark ages at which high-risk operations, then ordinary
 		// reads, close for views that depend on the identity source
-		{Name: "AUTHZ_SOURCE_HIGH", Type: config.Duration, Default: DefaultSourceHigh},
-		{Name: "AUTHZ_SOURCE_READ", Type: config.Duration, Default: DefaultSourceRead},
+		{Name: "AUTHZ_SOURCE_HIGH", Type: config.Duration, Default: core.DefaultSourceHigh},
+		{Name: "AUTHZ_SOURCE_READ", Type: config.Duration, Default: core.DefaultSourceRead},
 		// T_tight (security 03): how old the identity source's watermark may be for one person to tighten alone on the
 		// last applied facts
-		{Name: "AUTHZ_T_TIGHT", Type: config.Duration, Default: DefaultTight},
+		{Name: "AUTHZ_T_TIGHT", Type: config.Duration, Default: core.DefaultTight},
 		// the levels of management units below the root (security 04: the depth of re-delegation is the profile's
 		// explicit bound, A131): the root's max_subdelegation_depth when the install claim makes it, and no unit is made
 		// deeper
-		{Name: "AUTHZ_MAX_UNIT_DEPTH", Type: config.Integer, Default: int64(DefaultMaxUnitDepth)},
+		{Name: "AUTHZ_MAX_UNIT_DEPTH", Type: config.Integer, Default: int64(effectpoint.DefaultMaxUnitDepth)},
 		// batch plans (security 08, A132): how long from the preview a plan may run; the items beyond which a plan is a
 		// protected operation a second person confirms
-		{Name: "AUTHZ_PLAN_MAX_AGE", Type: config.Duration, Default: DefaultPlanMaxAge},
-		{Name: "AUTHZ_PLAN_CONFIRM_ABOVE", Type: config.Integer, Default: int64(DefaultPlanConfirmAbove)},
+		{Name: "AUTHZ_PLAN_MAX_AGE", Type: config.Duration, Default: plans.DefaultPlanMaxAge},
+		{Name: "AUTHZ_PLAN_CONFIRM_ABOVE", Type: config.Integer, Default: int64(plans.DefaultPlanConfirmAbove)},
 	}
-}
-
-// Definitions are the member's own declarations: it guards its user surface with a view like any component.
-func Definitions() *sdkauthz.Definitions {
-	none := map[string]sdkauthz.Dimension{}
-	// holder: whose a record is (a grant's grantee, a holding's holder), so a principal may see and relinquish its own
-	// (D82); a manager's segments hold every holder
-	holder := map[string]sdkauthz.Dimension{Holder: {Kind: sdkauthz.Principal, Column: "holder", PrincipalRole: "holder"}}
-	return &sdkauthz.Definitions{Component: ID,
-		Resources: []sdkauthz.Resource{
-			{Type: Records, ViewOperation: OpRead, Dimensions: holder, Fields: map[string]sdkauthz.Field{
-				"id": {Class: sdkauthz.Ordinary}, "record_type": {Class: sdkauthz.Ordinary}, "state": {Class: sdkauthz.Ordinary},
-				"body": {Class: sdkauthz.Ordinary}}},
-			{Type: Dispositions, ViewOperation: OpDispRead, Dimensions: none, Fields: map[string]sdkauthz.Field{
-				"id": {Class: sdkauthz.Ordinary}, "body": {Class: sdkauthz.Ordinary}}},
-			{Type: System, ViewOperation: SystemRead, Dimensions: none, Fields: map[string]sdkauthz.Field{}}},
-		Operations: []sdkauthz.Operation{
-			{Key: OpRead, ResourceType: Records, Purpose: "read", RiskClass: "low"},
-			{Key: OpChange, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
-				Audit: true},
-			{Key: OpTighten, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
-				Audit: true, TighteningOnly: true},
-			{Key: OpRelinquish, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
-				Audit: true, TighteningOnly: true},
-			{Key: OpDispRead, ResourceType: Dispositions, Purpose: "read", RiskClass: "low"},
-			{Key: OpDispose, ResourceType: Dispositions, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
-				Audit: true, TighteningOnly: true},
-			{Key: OpRelease, ResourceType: Dispositions, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
-				Audit: true},
-			{Key: SystemRead, ResourceType: System, Purpose: "read", RiskClass: "low"},
-			{Key: OpVerify, ResourceType: System, Purpose: "read", RiskClass: "low"},
-			{Key: OpSubmit, ResourceType: System, Purpose: "manage", RiskClass: "low", SideEffects: []string{"security_change"}},
-			{Key: OpAccountCheck, ResourceType: System, Purpose: "read", RiskClass: "low"},
-			{Key: OpReplay, ResourceType: System, Purpose: "action", RiskClass: "high", SideEffects: []string{"business_write"}},
-			{Key: OpRecover, ResourceType: System, Purpose: "read", RiskClass: "low"},
-			{Key: OpClaim, ResourceType: System, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
-				Audit: true},
-		}}
 }
 
 // Definition is the component as the launcher and the shells take it.
 func Definition() component.Definition {
-	return component.Definition{ID: ID, Version: Version, Keys: Keys(), Migrations: migrations(), GRPCPort: GRPCPort,
-		Subscribes: true, Evidence: true, Authz: Definitions(), Replay: OpReplay, Recovery: OpRecover,
+	return component.Definition{ID: core.ID, Version: core.Version, Keys: Keys(), Migrations: migrations(), GRPCPort: core.GRPCPort,
+		Subscribes: true, Evidence: true, Authz: core.Definitions(), Replay: core.OpReplay, Recovery: core.OpRecover,
 		New: func(rt *runtime.Runtime) (component.Module, error) { return New(rt) }}
 }

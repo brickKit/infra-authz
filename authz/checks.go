@@ -3,6 +3,8 @@ package authz
 import (
 	"context"
 
+	effectpoint "github.com/brickKit/infra-authz/v3/internal/effectpoint"
+
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/recovery"
 )
@@ -15,7 +17,7 @@ func (m *Module) RecoveryChecks(c *recovery.Checks) error {
 	for _, typ := range []string{"management_unit", "management_holding", "role_revision", "grant"} {
 		c.Presence(typ, records)
 	}
-	c.Presence(dispositionType, recovery.TablePresence("authz_disposition", "id", "revision"))
+	c.Presence(effectpoint.DispositionType, recovery.TablePresence("authz_disposition", "id", "revision"))
 	c.Presence("change_plan", func(ctx context.Context, tx db.Tx, ids []string) (map[string]int64, error) {
 		return unversioned(ctx, tx, "SELECT id::text FROM authz_plan WHERE id::text = ANY($1)", ids)
 	})

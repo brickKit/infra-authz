@@ -4,7 +4,10 @@ import (
 	"os"
 	"testing"
 
+	require "github.com/stretchr/testify/require"
+
 	"github.com/brickKit/be-sdk-go/v3/launcher"
+	"github.com/brickKit/be-sdk-go/v3/mergesafety"
 )
 
 // ownKeys are the descriptions of the member's own keys in component.yaml.
@@ -34,5 +37,18 @@ func TestTheManifestDeclaresWhatTheSDKReads(t *testing.T) {
 	if p := launcher.ManifestProblems(raw, Definition(), ownKeys); len(p) > 0 {
 		t.Errorf("component.yaml's configSchema differs from what the SDK reads:\n%v\nthe block:\n%s", p,
 			launcher.ConfigSchemaYAML(Definition(), ownKeys))
+	}
+}
+
+// TestTheModuleIsMergeSafe: the module is compiled into the Go infra shell: the entry package and every business
+// module under internal/.
+func TestTheModuleIsMergeSafe(t *testing.T) {
+	findings, err := mergesafety.CheckDir(".")
+	require.NoError(t, err)
+	inner, err := mergesafety.CheckTree("../internal")
+	require.NoError(t, err)
+	findings = append(findings, inner...)
+	for _, f := range findings {
+		t.Errorf("%v", f)
 	}
 }

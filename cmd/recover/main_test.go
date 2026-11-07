@@ -12,7 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/brickKit/infra-authz/v3/authz"
+	adminrecovery "github.com/brickKit/infra-authz/v3/internal/adminrecovery"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,8 +30,8 @@ func TestTheRequestIsSignedAsTheMemberChecksIt(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, run(path, "dep-1", "replace", "", "", []string{"h1", "h2"}, &out))
 	var got struct {
-		Request   authz.RecoveryRequest `json:"request"`
-		Signature string                `json:"signature"`
+		Request   adminrecovery.RecoveryRequest `json:"request"`
+		Signature string                        `json:"signature"`
 	}
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
 	assert.Equal(t, []string{"h1", "h2"}, got.Request.Holdings)

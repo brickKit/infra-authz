@@ -4,53 +4,50 @@
 
 ## 代码地图
 
-| 文件 | 内容 |
+代码按业务模块分层。**先读这一节，再进目录**：每个代码目录都有自己的 `AGENTS.md`（同目录的 `CLAUDE.md` 让 Claude Code 读这个目录的文件时自动带上它），写这一层负责什么、不负责什么、每个文件、依赖谁、测在哪。
+
+| 目录 | 是什么 |
 | --- | --- |
-| `authz/definition.go` | 组件定义、配置键、本组件自己的资源与操作 |
-| `authz/checks.go` | 整套恢复的核对（线协议第 14 章，SDK 的 `CheckService`，只许恢复工具调用）：本组件审计过的对象按版本答“还在不在”（`Presence`）；授权状态的不变量另由契约的 `RecoveryService.Check` 做 |
-| `authz/module.go` | 系统面与用户面的注册（变更、收紧、确认、按键查询、放弃本人的记录、读取）、`holder` 维度的事实、启动时的状态行与认领的记下 |
-| `authz/submit.go` | `DefinitionService.Submit`：注册表、逐份校验、版本与幂等 |
-| `authz/view.go` | `ViewService.Verify`：按已提交的记录重新计算一个组件的分片（授予的有效段，只含注册了、未退役、属主仍定义着的权限键）；主体的账号状态取自身份来源的投影（`JudgeMany`），来源的水位年龄决定完整续发、只为普通读取续发或关闭 |
-| `authz/change.go` | 生效点的入口（收紧之前写证据的意图，生效时写结论或“已取消”，放宽写一般记录，3.0.27）：用户的变更请求（09a 的 `be.security.change_request`）与作业都作为一次进入，在全部署的守卫下一个事务里：变更键的绑定、事实、决策表、按结果写入、绑定 |
-| `authz/replay.go` | 整套恢复第 6 步的重放（`ReplayService` 调这里）：按证据记下的请求再进生效点，事实里的业务前置条件放过（`replayFacts`），新建的记录沿用证据的身份 |
-| `authz/recoverystep.go` | 整套恢复的 6.4–6.5（契约的 `RecoveryService`，只许恢复工具调用）：来源水位是否已越过（`Sources`）、推迟的只有意图的收紧（`ReplayDeferred`：会结束管理员持有资格且之后可证明为零的不执行，持有人以 `recovery_review` 处置关闭）、不变量检查（`Check`：全量记账、关闭复核主体、判最后管理员） |
-| `authz/decide.go` | 决策表（安全 08 的 30 行）：纯函数，按行序第一条命中 |
-| `authz/facts.go` | 读事实：新的放宽（候选）、已有记录的变更（终止、撤销、放弃、收窄）、到点的已保存记录；管理资格与包含证明 |
-| `authz/requester.go` | 请求者的资格：管理资格 ∩ 身份来源证明的账号（此刻按 `D_src_high`；不能时按最后已应用的事实，`JudgeApplied`，并判断要不要第二人：超过 `T_tight`、没有水位或来源 `stalled`）；最后管理员 |
-| `authz/target.go` | 被变更的记录：加锁读取、所属单元与持有者、收窄与包含旧记录的判断；对象是否影响授权管理员的可用性（`affectsAdmins`） |
-| `authz/enact.go` | 按结果写记录：新建、保存为待确认或待生效（登记到点的工作项）、生效、结束、收窄 |
-| `authz/scheduled.go` | 本组件自己的进入：已保存记录的工作项以派生键 `<记录>:<状态修订>:<触发>` 进生效点；本版有待生效到点 |
-| `authz/effective.go` | 有效段（安全 08）：单元的上限沿父单元求交到根（按受授人，`ofFor`），段与段按安全 07 的原子表求交；视图与生效点的包含证明都用它 |
-| `authz/confirm.go` | 确认记录（安全 08、09a 的 `be.security.confirmation`）：确认人针对已保存的放宽或收紧的对象与修订建立确认；两种依据：其他授权管理员（A123）、部署所有者的签名（A124，`AUTHZ_OWNER_KEY`）；生效点核对（未用过、未过期、对象与修订一致、不是申请人或对象本人、确认人此刻合格），已保存的放宽确认齐全后由工作项进生效点，生效时标为已使用 |
-| `authz/disposition.go` | 安全处置（安全 08、A128）：发起（处置上限即管理上限、受保护）、范围内记录转暂停、视图里与暂停范围相交的段整段不给（可证明不相交才放过）、列表 |
-| `authz/pending.go` | 待恢复（安全 08）：部署的授权状态，可用管理员可证明为零时进入并记下原因；读取接口 |
-| `authz/signal.go` | 身份侧处置的派生（安全 08）：应用账号状态时按转变建立或并入；解除要列出移除的证据 |
-| `authz/release.go` | 处置的解除（安全 08）：一次求完、`restore_pending`、谁能解除、绑定处置与修订的确认 |
-| `authz/accountchange.go` | 账号状态变更（安全 08、A134）：系统面 `AccountService.CheckAccountChange`（要不要确认）、应用账号状态时用掉确认或标上待补确认（`confirmation_backfill_pending`）、补确认的路由 |
-| `authz/cooling.go` | 冷静期（安全 08、A127）：所有者确认的放宽在别的管理员刚变得不可用时转为待生效；“申请人自己弄得不可用的仍算可用”（CP108）；否决 |
-| `authz/claim.go` | 安装认领（安全 08、A130）：安装时记下，认领人消耗一次 |
-| `authz/recovery.go` | 管理员恢复（安全 08、A129）：签名请求的核对、撤换、恢复、中止 |
-| `cmd/recover` | 部署所有者在部署机上的恢复命令：签名并提交恢复请求 |
-| `cmd/owner-sign` | 部署所有者的工具：安装时生成密钥对；在离线的机器上对成员给出的待签内容签名 |
-| `authz/closure.go` | 闭包作业与依赖索引（安全 08 的影响闭包）：来源收紧后按索引找出受影响的记录记账：`source_ended`、`source_narrowed`、`held`（`uncomputable`）、部分越界待复核；索引不完整时扫描并把来源域标为待复核 |
-| `authz/effect.go` | 生效点的工具：推进安全修订与审计、包含证明、单元与持有资格的读取 |
-| `authz/security.go` | 记录的字段、逐维的包含规则（`self` 两边都按受授人实例化） |
-| `authz/budget.go` | 安全 07 的预算：一份授予的段数、值与树的项数、一个人在一个操作上的段数；授予、到点、恢复与解除处置时检查 |
-| `authz/delegate.go` | 再下放与管理动作（09a 的 `management_actions`、`max_subdelegation_depth`，A131）：有效动作与层数沿父链求交，`managesWith` |
-| `authz/plan.go` | 批量计划（安全 08、A132）：草稿、项的校验、预览（记下目标修订、估算原子比较次数） |
-| `authz/planrun.go` | 批量计划的执行：工作项逐项进生效点、项的状态表、记录迁移时跟着转、结算、取消与到期 |
-| `authz/planhttp.go` | 批量计划的路由、第二人确认（绑定计划与摘要）、09a 的编码 |
-| `cmd/seed`（`make seed`） | 种子：给单元管理员授予本组件自己的操作；角色、授予与管理单元由定义那些操作的组件的种子建立 |
+| `main.go` | 单跑的入口 |
+| [`authz/`](authz/AGENTS.md) | 入口：组件定义、配置键与组装（建 `core.Base` 与账号状态的投影，路由、系统面、作业、订阅、启动、证据的重放与恢复核对都在这里登记，转给业务模块）；不写业务 |
+| [`internal/`](internal/AGENTS.md) | 业务：下面的模块各一个包；模块之间的依赖表与分层在它的 `AGENTS.md` |
+| [`itest/`](itest/AGENTS.md) | 集成测试，按业务流程分文件；它的 `AGENTS.md` 是测试索引 |
 | `authz/migrations/` | 表 |
+| `cmd/recover` | 部署所有者在部署机上的恢复命令：签名并提交恢复请求（`internal/adminrecovery` 的 `RecoveryRequest`） |
+| `cmd/owner-sign` | 部署所有者的工具：安装时生成密钥对；在离线的机器上对成员给出的待签内容签名 |
+| `cmd/seed`（`make seed`） | 种子：给单元管理员授予本组件自己的操作；角色、授予与管理单元由定义那些操作的组件的种子建立 |
 | `docs/design.md` | 设计：术语、数据、规则、命令、实现状态、未决问题 |
+
+业务模块（`internal/` 下）：
+
+| 模块 | 负责 |
+| --- | --- |
+| [`effectpoint`](internal/effectpoint/AGENTS.md) | 生效点（安全 08）：每一次变更在全部署的守卫下一个事务里进入；变更、收紧、放弃的路由；确认、冷静期、安全处置与解除、身份侧处置、待恢复、影响闭包与到点、预算与再下放 |
+| [`view`](internal/view/AGENTS.md) | `ViewService.Verify`：按已提交的记录重新计算一个组件的视图分片 |
+| [`definitions`](internal/definitions/AGENTS.md) | `DefinitionService.Submit`：组件提交资源与操作定义 |
+| [`plans`](internal/plans/AGENTS.md) | 批量计划（A132） |
+| [`accounts`](internal/accounts/AGENTS.md) | 账号状态变更的确认（A134） |
+| [`claim`](internal/claim/AGENTS.md) | 安装认领（A130） |
+| [`restore`](internal/restore/AGENTS.md) | 整套恢复：6.3 的重放、6.4–6.5 |
+| [`adminrecovery`](internal/adminrecovery/AGENTS.md) | 管理员恢复（A129） |
+| [`confirmroutes`](internal/confirmroutes/AGENTS.md) | 确认的两个路由：按对象的种类分给负责的模块 |
+
+共用的：[`core`](internal/core/AGENTS.md)（名字与资源定义、记录的字段与包含规则、有效段的求交、决策表、注册表、状态修订、`Base`）。
+
+| 想改 | 从这里开始 | 然后 |
+| --- | --- | --- |
+| 生效点的一个结果（决策表的一行） | `internal/core/decide.go` | 读事实的 `internal/effectpoint/facts.go`、写入的 `enact.go`；`TestTheDecisionTable`；`itest/` 的 `effectPoint`、`lifecycle` |
+| 一个维度的包含规则、原子的求交 | `internal/core/security.go`、`effective.go` | `TestContainmentRules`、`TestAtomIntersection`；安全 07 |
+| 视图的形状 | `internal/view` | 先用 SDK 的 `GRPCSource` 打开一次（`itest/` 的 `definitionsAndViews`） |
+| 一种新的确认对象 | `internal/effectpoint/confirm.go` 或负责它的模块 | `internal/confirmroutes` 的分派 |
+| 处置与解除 | `internal/effectpoint/disposition.go`、`release.go`、`signal.go` | `itest/` 的 `dispositions`、`releases`、`identitySide` |
+| 批量计划 | `internal/plans` | `itest/plans_integration_test.go` |
+| 一个配置键 | `authz/definition.go` 的 `Keys`、`authz/module.go` 的 `New` | `component.yaml` 的 `configSchema`、`BRICKKIT.md`；`TestTheManifestDeclaresWhatTheSDKReads` |
 
 ## 构建与测试
 
-- `go test ./...`：单元测试，覆盖决策表、包含规则与求交规则的每一行、上限链、注册表、提交的交叉检查与合并安全。
-- `go test -tags integration ./authz/`：
-  - 依赖：本机的 PostgreSQL（环境变量 `AUTHZ_IT_PG_PASSWORD`），以及 be-sdk-go 的 `sectest` 测试部署；
-  - 覆盖：提交的规则；生效点（`authz_integration_test.go` 的 T4 段，待生效与到点的工作项在 `scheduled_integration_test.go`）；视图经 SDK 自己的客户端打开；越权授出被拒；撤权在下一次核验里消失；变更键；最后管理员；审计；身份来源（测试里的替身组件 `test/iam`，见 `authz/identity_integration_test.go`：只声明账号状态流，SDK 给它挂上补取与读取）：账号的安全状态版本与停用进视图、旧版本的令牌在本组件的用户面答 `TOKEN_STALE`、来源停住时先只为普通读取续发再关闭、恢复后完整续发。
-  - 消息系统用 `pgqueue://`，放在每次重建的 schema `authz_it_bus`：共用的消息系统上会收到以前几次运行的部署的事件，按 P9.11 会把来源判为 `blocked`。
+- `make test`（`go vet ./... && go test ./...`）：单元测试，覆盖决策表、包含规则与求交规则的每一行、上限链、注册表、提交的规则与交叉检查、预算、再下放、清单与合并安全（入口与 `internal/` 下全部包）。
+- `make test-integration`（`go test -count=1 -tags integration ./itest/`）：对本机的 PostgreSQL（`AUTHZ_IT_PG_PASSWORD`）与 be-sdk-go 的 `sectest` 测试部署；每个文件测哪条流程、各步的顺序，在 [itest/AGENTS.md](itest/AGENTS.md)。覆盖提交的规则、生效点、视图经 SDK 自己的客户端打开、越权授出被拒、撤权在下一次核验里消失、变更键、最后管理员、审计；身份来源（测试里的替身组件 `test/iam`：只声明账号状态流，SDK 给它挂上补取与读取）：账号的安全状态版本与停用进视图、旧版本的令牌在本组件的用户面答 `TOKEN_STALE`、来源停住时先只为普通读取续发再关闭、恢复后完整续发。消息系统用 `pgqueue://`，放在每次重建的 schema `authz_it_bus`：共用的消息系统上会收到以前几次运行的部署的事件，按 P9.11 会把来源判为 `blocked`。
 - `brickkit lint`
 
 ## 设计取舍
