@@ -69,6 +69,8 @@
 
 ## 实现状态
 
+3.0.43：be-sdk-go alpha.117（全系统同一个 SDK 版本；SDK 加了预占的参与方 `reserve`，线协议第 16 章）
+
 3.0.42：代码按业务模块分层，行为不变：入口包 `authz/` 只组装，业务在 `internal/` 下（`effectpoint`（生效点，含确认、冷静期、处置与解除、待恢复、闭包）、`view`、`definitions`、`plans`、`accounts`、`claim`、`restore`、`adminrecovery`、`confirmroutes`，下面是 `core`），集成测试在 `itest/`、按业务流程分文件；每个代码目录一份 `AGENTS.md`。生效点迁移记录状态后经 `Base.RecordMoved` 通知计划（原来直接调计划的函数）；确认的两个路由单独成模块，按对象的种类分派。合并安全的检查扩到 `internal/` 下全部包；`Makefile` 补上 `test`、`test-integration`。
 
 3.0.41：be-sdk-go alpha.116（全系统同一个 SDK 版本；冷热数据：每天的孤儿清理、擦除作废导出、已销毁的记录从决定起答不存在、释放在事务之外读备份记录）
