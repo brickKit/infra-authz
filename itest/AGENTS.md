@@ -48,6 +48,7 @@
 | `evidence_integration_test.go` | `TestTheReplayAppliesTheEvidenceAgain` | 整套恢复 6.3：数据库回到之前，按提交顺序重放授予与撤销 | `restore`（`replay.go`） |
 | `recoverystep_integration_test.go` | `TestTheRecoveryStepAfterTheReplay` | 整套恢复 6.4–6.5：来源水位、不变量检查、推迟的收紧 | `restore`（`recoverystep.go`） |
 | `employment_integration_test.go` | `TestTheEmployeeSource` | C1 E4b：员工成员的水位流是第二个内部来源：记录到达事实、变化替换事实、整套恢复 6.4 一起等它 | `employment`、入口、`restore` |
+| `links_integration_test.go` | `TestAccountLinks` | C1 E4c：关联的确认绑定员工、账号、动作与员工版本；员工成员先问、什么也不用掉；应用关联时用掉、只用一次；建立时所有者不能代替可用的管理员，结束时可以；`Administrators`；两个方法只答员工成员 | `accounts`、`confirmroutes` |
 | `grpcerrors_integration_test.go` | `TestSystemMethodsAnswerTheirReason` | 系统面的拒绝以它自己的原因到达调用方，不是 `INTERNAL` | 入口、`definitions` |
 
 共用的：

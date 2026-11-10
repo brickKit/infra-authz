@@ -10,12 +10,12 @@
 | `view` | `ViewService.Verify`：按已提交的记录重新计算一个组件的视图分片 | `core`、`effectpoint` |
 | `definitions` | `DefinitionService.Submit`：组件提交资源与操作定义 | `core` |
 | `plans` | 批量计划（A132）：草稿、预览、第二人确认、逐项进生效点、结算、取消与到期 | `core`、`effectpoint` |
-| `accounts` | 账号状态变更（A134）：身份成员先问要不要确认、应用时用掉确认或标待补、补确认 | `core`、`effectpoint` |
+| `accounts` | 账号状态变更（A134）：身份成员先问要不要确认、应用时用掉确认或标待补、补确认；账号与员工关联的确认（员工成员先问、应用关联时用掉）、`Administrators` | `core`、`effectpoint`、`employment` |
 | `claim` | 安装认领（A130）：没有管理时记下，认领人消耗一次 | `core`、`effectpoint` |
 | `restore` | 整套恢复：6.3 按证据重放、6.4–6.5（来源水位、推迟的收紧、不变量检查） | `core`、`effectpoint` |
 | `adminrecovery` | 管理员恢复（A129）：部署所有者签名的请求 | `core`、`effectpoint`、`plans` |
 | `employment` | 员工来源的事实：关联与任职在本成员里的索引（`authz_employee_fact`） | `core` |
-| `confirmroutes` | 确认的两个路由：按对象的种类（记录、处置、计划、账号）分给负责的模块 | `core`、`effectpoint`、`plans`、`accounts` |
+| `confirmroutes` | 确认的两个路由：按对象的种类（记录、处置、计划、账号、关联）分给负责的模块 | `core`、`effectpoint`、`plans`、`accounts` |
 | `core`（共用） | 名字与资源定义、记录的字段与包含规则、有效段的求交、决策表、注册表、状态修订、`Base` | — |
 
 分层（每个包只引用比它低的层）：`confirmroutes`、`adminrecovery` → `plans`、`accounts`、`claim`、`restore`、`view` → `effectpoint` → `definitions`、`employment`、`core`。

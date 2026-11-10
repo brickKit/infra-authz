@@ -1,6 +1,6 @@
 # confirmroutes：确认的路由
 
-`POST /api/authz/confirmations` 与 `GET /api/authz/confirmations/owner-payload` 两个路由：一个入口确认四种对象，按请求里的字段分给负责的模块：处置的解除（`effectpoint.ConfirmDisposition`）、批量计划（`plans.ConfirmPlan`）、账号的状态变更（`accounts.ConfirmAccount`）、已保存的记录（`effectpoint.Confirm`）；每种对象先按它要的操作检查授权。只做分派，确认的规则在各模块。
+`POST /api/authz/confirmations` 与 `GET /api/authz/confirmations/owner-payload` 两个路由：一个入口确认五种对象，按请求里的字段分给负责的模块：处置的解除（`effectpoint.ConfirmDisposition`）、批量计划（`plans.ConfirmPlan`）、账号的状态变更（`accounts.ConfirmAccount`）、账号与员工的关联（`accounts.ConfirmLink`：建立按变更、结束按收紧检查授权）、已保存的记录（`effectpoint.Confirm`）；每种对象先按它要的操作检查授权。只做分派，确认的规则在各模块。
 
 ## 负责与不负责
 

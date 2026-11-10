@@ -56,6 +56,11 @@ type ConfirmIn struct {
 	Account            string `json:"account,omitempty"`
 	TargetState        string `json:"target_state,omitempty"`
 	TargetStateVersion *int64 `json:"target_state_version,omitempty"`
+	// an account's link to an employee or its end (accounts' links.go): the employee, the account (Account), the
+	// action (link, unlink) and the employee's version it is made on
+	Employee        string `json:"employee,omitempty"`
+	Action          string `json:"action,omitempty"`
+	EmployeeVersion *int64 `json:"employee_version,omitempty"`
 }
 
 // AdmitConfirmation checks the operation a confirmation of target needs: a saved widening's is a change, which a

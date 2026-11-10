@@ -13,7 +13,7 @@
 | --- | --- |
 | `definition.go` | 迁移、`Keys`、`Definition()`（名字与版本在 `core`） |
 | `module.go` | `Module` 与 `New`；`Subscriptions`、`Routes`、`Jobs`、`Replays`、`Start`（状态行、实例、没有管理时记下安装认领）；`handler`、`job` 适配 |
-| `services.go` | 系统面的登记与转发：`Verify` → `view`、`Submit` → `definitions`、`CheckAccountChange` → `accounts`、`Sources`、`ReplayDeferred`、`Check` → `restore` |
+| `services.go` | 系统面的登记与转发：`Verify` → `view`、`Submit` → `definitions`、`CheckAccountChange`、`CheckLinkChange`、`Administrators` → `accounts`、`Sources`、`ReplayDeferred`、`Check` → `restore` |
 | `checks.go` | 整套恢复的核对（线协议第 14 章，SDK 的 `CheckService`，只许恢复工具调用）：本组件审计过的对象按版本答“还在不在”（`Presence`）；授权状态的不变量另由契约的 `RecoveryService.Check` 做（`restore`） |
 | `manifest_test.go` | 单元测试：清单的 `configSchema`；合并安全（入口与 `internal/` 下全部包） |
 | `structure_test.go` | 单元测试：`internal/` 里只有 `Transition` 写 `authz_record.state`；插入记录的地方都在 `recordInserts` 里登记 |

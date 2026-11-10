@@ -216,8 +216,11 @@ func employees(b *core.Base, rt *runtime.Runtime) error {
 		return errs.New(errs.ReasonRequestInvalid, "EMPLOYEE_GRPC_URL cannot be dialled: the employee member's system surface")
 	}
 	changed := func(ctx context.Context, tx db.Tx, id string) error {
-		_, _, err := employment.Index(b, ctx, tx, id)
-		return err
+		f, ok, err := employment.Index(b, ctx, tx, id)
+		if err != nil || !ok {
+			return err
+		}
+		return accounts.LinkChanged(b, ctx, tx, f) // a link's confirmation used
 	}
 	b.Employees = &projection.Watermarked{Projection: projection.Projection{Name: core.Employees, Changed: changed}, DB: rt.DB,
 		Source: emp, Stream: core.EmployeeStream, Deployment: b.Deployment, Freshness: b.SrcHigh, Pull: projection.PullClient{Conn: conn},

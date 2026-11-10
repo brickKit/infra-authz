@@ -20,8 +20,16 @@ func (m *Module) Services(s *grpcx.Services) error {
 	s.Register(&authzv3.DefinitionService_ServiceDesc, m, map[string]grpcx.Method{
 		"Submit": {Operation: core.OpSubmit, Callers: []string{grpcx.AnyComponent}}})
 	// the identity member asks before it changes an account's status (T9c, A134)
+	// and the employee member before it links an account or ends a link, and before a termination (C1, D62); a
+	// deployment without one names nobody: the methods answer no caller
+	employee := []string{m.b.RT.Config.String("EMPLOYEE_COMPONENT")}
+	if employee[0] == "" {
+		employee = []string{noEmployeeMember}
+	}
 	s.Register(&authzv3.AccountService_ServiceDesc, m, map[string]grpcx.Method{
-		"CheckAccountChange": {Operation: core.OpAccountCheck, Callers: []string{m.b.RT.Config.String("IAM_COMPONENT")}}})
+		"CheckAccountChange": {Operation: core.OpAccountCheck, Callers: []string{m.b.RT.Config.String("IAM_COMPONENT")}},
+		"CheckLinkChange":    {Operation: core.OpAccountCheck, Callers: employee},
+		"Administrators":     {Operation: core.OpAccountCheck, Callers: employee}})
 	// a full recovery's 6.4-6.5 after the replay (A142): the replay's operation, the tool only
 	tool := []string{restore.RecoveryTool}
 	s.Register(&authzv3.RecoveryService_ServiceDesc, m, map[string]grpcx.Method{
@@ -29,6 +37,20 @@ func (m *Module) Services(s *grpcx.Services) error {
 		"ReplayDeferred": {Operation: core.OpReplay, Callers: tool, Orchestration: true},
 		"Check":          {Operation: core.OpReplay, Callers: tool, Orchestration: true}})
 	return nil
+}
+
+// noEmployeeMember is the caller the employee member's methods name when the deployment has none: no component's
+// certificate carries it.
+const noEmployeeMember = "-"
+
+// CheckLinkChange answers whether a confirmation holds for an account link's change (the accounts module).
+func (m *Module) CheckLinkChange(ctx context.Context, in *authzv3.CheckLinkChangeRequest) (*authzv3.CheckLinkChangeResponse, error) {
+	return accounts.CheckLinkChange(m.b, ctx, in)
+}
+
+// Administrators answers which accounts hold the authorization admin role (the accounts module).
+func (m *Module) Administrators(ctx context.Context, in *authzv3.AdministratorsRequest) (*authzv3.AdministratorsResponse, error) {
+	return accounts.Administrators(m.b, ctx, in)
 }
 
 // Verify answers a component's view (the view module).

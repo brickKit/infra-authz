@@ -24,9 +24,14 @@ func ConfirmHTTP(m *core.Base, c *httpx.Context) error {
 	}
 	// a release's confirmation, under the release operation; a plan's, under change; an account's, under tighten for a
 	// disablement or a freeze (admitted on a stale view like any tightening) and under change for a re-enable
-	if in.Disposition != "" || in.Plan != "" || in.Account != "" {
+	// a link's, under change for a link and under tighten for its end
+	if in.Disposition != "" || in.Plan != "" || in.Account != "" || in.Employee != "" {
 		op, confirm := core.OpRelease, effectpoint.ConfirmDisposition
 		switch {
+		case in.Employee != "" && in.Action == "unlink":
+			op, confirm = core.OpTighten, accounts.ConfirmLink
+		case in.Employee != "":
+			op, confirm = core.OpChange, accounts.ConfirmLink
 		case in.Plan != "":
 			op, confirm = core.OpChange, plans.ConfirmPlan
 		case in.Account != "" && in.TargetState == "active":
@@ -87,6 +92,9 @@ func OwnerPayloadHTTP(m *core.Base, c *httpx.Context) error {
 		}
 		return c.JSON(200, map[string]any{"deployment": o.Deployment, "target": o.Target, "expires_at": o.ExpiresAt,
 			"expected_revision": o.ExpectedRevision})
+	}
+	if employee := c.Query("employee"); employee != "" { // a link's change: the employee, the action on the account at a version
+		return accounts.LinkPayloadHTTP(m, c, employee)
 	}
 	if account := c.Query("account"); account != "" { // an account's status change: the account, the status at a version
 		return accounts.AccountPayloadHTTP(m, c, account)
