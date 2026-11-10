@@ -25,6 +25,8 @@
 | 包含证明 | 授出的段必须在授出者的上限之内，逐维比较；生效点现场证明，不复用旧的见证 | 安全 07 |
 | 生效点 | 改变安全记录的那个本地事务；放宽只在这里检查通过才生效 | `effectpoint.Effect`（`internal/effectpoint/change.go`） |
 | 安全修订 | 每个生效的变更推进的序号；本版只有一个域 | `authz.security.deployment` |
+| 自然人 | 关联到同一员工的全部有效账号算一个人：确认人的独立性、安全处置的账号集合按它判断（安全 02、08） | `employment.PersonOf`、`effectpoint.Independent` |
+| 任职绑定 | 授予或管理持有带 `appointment`：任职在职、账号关联到它的员工时才算；任职结束或关联结束，视图立即不给、闭包记为 `source_ended`（安全 04、D30 的前一半） | `employment.Binding` |
 | 视图 | 一个组件本地求值用的授权快照，带有效期与安全修订；每次核验在主库上重新计算 | `ViewService.Verify` |
 
 ## 拥有的数据
@@ -77,6 +79,8 @@
 | 读取安全记录 | 用户面 | `infra.authz.security_record.read` |
 | 放弃自己的授予或管理持有资格（D82） | 用户面 | `infra.authz.security_record.relinquish`（本组件给每个持有者的固定段） |
 | 判断一次账号状态变更要不要确认（A134） | 系统面 `AccountService.CheckAccountChange`（只许身份成员） | `infra.authz.system.account_check` |
+| 判断一次账号关联的变更（建立、结束）有没有成立的确认 | 系统面 `AccountService.CheckLinkChange`（只许员工成员） | `infra.authz.system.account_check` |
+| 哪些账号是授权管理员（D62 的提示） | 系统面 `AccountService.Administrators`（只许员工成员） | `infra.authz.system.account_check` |
 | 管理员账号的补确认 | 用户面 `POST /api/authz/accounts/{principal}/reconfirm` | `infra.authz.security_record.change`（受保护） |
 
 设计上还有：批量计划（一次改一批授予）、查询编译所需的段（给 SDK 编译数据范围）、能力声明（安全 09b，装配准入据此检查）。
@@ -88,9 +92,17 @@
 ## 依赖
 
 - 身份（必需）：令牌的公钥；账号状态，内部来源（水位来源，安全 03、D64）：本组件以带水位的投影 `accounts` 保存它（SDK 的 `projection.Watermarked`，补取与批量读取、快照是身份成员系统面上的标准方法 A115、A121），视图的主体条目带 `accounts_disabled` 与 `security_version`。数据库、消息系统（必需）。
-- `mdm/org`（可选）：法人与部门维度，缺时这两个维度不可用；`mdm/employee`（可选）：缺时任职关联授予不可用；`infra/audit`（可选，兼任证据存储）：收紧的意图在本地事务之外写入，缺或不可达时收紧照样生效，完整记录进入外部告警（协议 15）。内部来源按水位探测取得新鲜度（安全 03）。
+- `mdm/org`（可选）：法人与部门维度，缺时这两个维度不可用；`mdm/employee`（可选，3.0.46 起）：第二个内部来源（水位流 `mdm.employee`，投影 `employees`，配置 `EMPLOYEE_COMPONENT`、`EMPLOYEE_GRPC_URL`），给出账号与员工的关联与任职；缺时每个账号自成一人、没有记录能绑定任职，`CheckLinkChange` 与 `Administrators` 不答任何调用方；`infra/audit`（可选，兼任证据存储）：收紧的意图在本地事务之外写入，缺或不可达时收紧照样生效，完整记录进入外部告警（协议 15）。内部来源按水位探测取得新鲜度（安全 03）。
 
 ## 实现状态
+
+3.0.46（C1 的 E4，`contract-infra-authz` alpha.6）：
+
+- **写意图之前先查键**：同一个变更键重放的收紧不再在锁外先写意图、再取消；先不加锁查一次键的绑定，已绑定就直接答绑定的结果。
+- **员工来源**（`internal/employment`，迁移 0017）：员工成员的水位流是第二个内部来源，投影的 `Changed` 钩子维护 `authz_employee_fact`（员工、任职、关联：所属员工、账号、状态、版本）；整套恢复的 6.4 一起等它。
+- **账号关联的确认**（安全 08 第 21 行，`internal/accounts/links.go`，迁移 0018）：确认用 `POST /api/authz/confirmations` 的 `employee`、`account`、`action`（`link`、`unlink`）、`employee_version` 建立，绑定这四样；员工成员在建立或结束关联之前问 `CheckLinkChange`，不用掉；本组件从员工来源应用带着它的关联记录时用掉（`link:<关联>@<版本>`、`unlink:<关联>@<版本>`）；没有成立的确认的关联照常生效（来源事实），写错误级日志。建立是放宽：有别的可用管理员时部署所有者不能代替；结束是收紧，可以代替。`Administrators` 答一组账号（至多 100 个）里哪些是授权管理员。
+- **自然人**：确认人不能与申请人、对象是同一个人（关联到同一员工的账号算一个人）——记录、处置的解除、计划、账号状态、账号关联的确认都按它判断，也不能确认本人员工的关联；员工来源此刻证明不了时答无法证明（按最后已应用的事实的收紧除外）。安全处置记下发起时这个人的全部账号，求值时再并上此后关联到同一员工的账号，新关联进来的账号逃不掉。
+- **任职绑定**（安全 04、D30 的前一半，迁移 0019）：授予与管理持有可以带 `appointment`；授出时任职计划中或在职、受授账号关联到它的员工（`D_src_high`，证明不了可重试）；视图只在来源证明任职在职、关联有效时给（`D_src_read`），任职计划中、结束、证明不了都不给；任职是闭包的来源种类：任职状态变了、关联结束都登记闭包，记为 `source_ended`；整套恢复的 6.5 也按它记账。管理持有在任职结束与闭包之间按最后应用的事实判断可用（`HoldingsOf`），直接查表的地方（`OthersAvailable`）要等闭包，相差作业的延迟。
 
 3.0.45：be-sdk-go alpha.119（全系统同一个 SDK 版本；订阅最后一次投递处理之前先提交死信，进程中途退出时消息不再无声消失，P6.20）
 
@@ -191,6 +203,9 @@ SDK alpha.83；恢复阶段加 `replaying`。
 | 成员切换前后摘要等价 | 成员切换本版不做 |
 
 ## 未决问题
+
+- D30 的后一半：新任职按岗位模板生成授权建议、由管理者确认（C1 的 E0 定为不在首批：客户要“调岗后给出建议”或 `infra/workflow` 做好后一起做）；现在由管理者手工授出并绑定任职。
+- 任职的终点随视图下发、到点在本地失效（安全 08 的“员工、账号与任职”）：员工成员的任职记录只有业务日期，没有带时区的时刻；现在任职结束在授权组件应用事件后失效（上界是来源水位），到期结束由员工成员每分钟的作业办理。要做时员工成员的任职记录加上开始与结束的时刻。
 
 - 权限键退役或属主不再定义之后，全部段都无效的授予仍是 `active`（视图不给访问）：闭包作业要不要因注册表或定义的变化扫描并以 `source_narrowed` 结束它们。
 

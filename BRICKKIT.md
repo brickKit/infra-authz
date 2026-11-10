@@ -67,12 +67,13 @@
 - `AUTHZ_GRPC_URL` 指向本组件自己的系统面（`$endpoint:infra/authz:grpc`）。
 - 身份成员的系统面：`IAM_GRPC_URL`（`$endpoint:<身份成员>:grpc`）与 `IAM_COMPONENT`（身份成员的组件 ID，例如 `infra/iam-casdoor`：它出示的证书、账号状态来源的名字）；两者写在装配的共享值里，换身份成员时一起改。身份成员的账号状态流要把 `infra/authz` 列为补取者与读取者（`infra/iam-casdoor` 3.0.17 起）。
 - 运行档案与告警渠道（3.0.27 起，可选）：`RUN_PROFILE_URL`、`RUN_PROFILE_BUCKET`（开了对象锁的桶）、`RUN_PROFILE_ACCESS_KEY`、`RUN_PROFILE_SECRET_KEY`、`ALERT_WEBHOOK_URL`；不配时证据存储不可达期间的意图只记在日志里。
-- 消息系统：`BUS_URL`（账号状态的事件；事件停了也照样经补取取得，只是慢一些）。
+- 员工成员（3.0.46 起，可选）：`EMPLOYEE_GRPC_URL`（`$endpoint:mdm/employee:grpc`）与 `EMPLOYEE_COMPONENT`（`mdm/employee`），两者一起写在装配的共享值里；员工成员的水位流 `mdm.employee` 把 `infra/authz` 列为补取者与读取者。不配时每个账号自成一人、没有记录能绑定任职，`CheckLinkChange` 与 `Administrators` 不答任何调用方。
+- 消息系统：`BUS_URL`（账号状态与员工来源的事件；事件停了也照样经补取取得，只是慢一些）。
 
 ## 依赖说明
 
 - 必需：数据库、消息系统与身份成员（令牌的公钥；账号状态的来源）。
-- 可选：`infra/audit`（`AUDIT_GRPC_URL`）；缺时安全变更的审计记录留在本地表，等它上线。
+- 可选：`infra/audit`（`AUDIT_GRPC_URL`）；缺时安全变更的审计记录留在本地表，等它上线。`mdm/employee`（`EMPLOYEE_*`）：账号与员工的关联（自然人、关联的确认）与任职（授予与管理持有绑定任职）。
 
 ## 配置指南
 
@@ -84,6 +85,7 @@
 | `AUTHZ_REGISTRY` | 注册表中的属主 |
 | `AUTHZ_INSTALL_CLAIM`、`AUTHZ_INSTALL_CLAIM_VALIDITY` | 安装认领与它的有效期 |
 | `IAM_GRPC_URL`、`IAM_COMPONENT`（必填） | 身份成员的系统面与组件 ID：账号状态从这里补取与读取 |
+| `EMPLOYEE_GRPC_URL`、`EMPLOYEE_COMPONENT` | 员工成员的系统面与组件 ID（可选）：关联与任职从这里补取与读取 |
 | `AUTHZ_SOURCE_HIGH`、`AUTHZ_SOURCE_READ` | `D_src_high`（起始 1 分钟，至多 5 分钟）与 `D_src_read`（起始 10 分钟，至多 1 小时，不短于前者）；调大即放宽撤权的上界，产品说明随之改写（安全 03） |
 | `AUTHZ_T_TIGHT` | `T_tight`（起始 1 小时）：身份来源停住时，一个人按最后已应用的事实办理收紧的水位年龄上限；超过后要第二人确认（安全 03） |
 | `AUTHZ_OWNER_KEY` | 部署所有者确认的公钥 |
@@ -94,15 +96,15 @@
 
 ## 契约索引
 
-- 系统面：`contract-infra-authz` 的 `be.authz.v3.ViewService/Verify`、`be.authz.v3.DefinitionService/Submit` 与 `be.authz.v3.AccountService/CheckAccountChange`（alpha.3 起，只许身份成员；`UNPROVABLE` 的回答 alpha.4 起）。成员的义务写在那个仓库的 README 里。
+- 系统面：`contract-infra-authz` 的 `be.authz.v3.ViewService/Verify`、`be.authz.v3.DefinitionService/Submit` 与 `be.authz.v3.AccountService/CheckAccountChange`（alpha.3 起，只许身份成员；`UNPROVABLE` 的回答 alpha.4 起）；`AccountService/CheckLinkChange`、`AccountService/Administrators`（alpha.6 起，3.0.46，只许员工成员）。成员的义务写在那个仓库的 README 里。
 - 用户面：
 
   | 路由 | 操作 | 说明 |
   | --- | --- | --- |
   | `POST /api/authz/changes` | `infra.authz.security_record.change` | 生效点：放宽与中性变更，见下 |
   | `POST /api/authz/tightenings` | `infra.authz.security_record.tighten`（只减少访问） | 生效点：收紧，见下；身份来源停住时照常可用 |
-  | `POST /api/authz/confirmations` | 已保存的放宽：`.change`；收紧：`.tighten` | 确认一项受保护的变更或两人规则下的收紧：`target`；收紧另带 `expected_revision`；账号状态变更带 `account` 与 `target_state`（账号的目标状态是 `active` 时要 `.change`，否则 `.tighten`）；部署所有者确认另带 `basis: deployment_owner`、`expires_at` 与 `signature`。回答确认的 `id` 与 `expires_at`（201） |
-  | `GET /api/authz/confirmations/owner-payload?target=&expected_revision=` | 同上 | 部署所有者要签的内容（`owner-sign` 与种子用）；账号状态变更用 `?account=&target_state=` |
+  | `POST /api/authz/confirmations` | 已保存的放宽：`.change`；收紧：`.tighten` | 确认一项受保护的变更或两人规则下的收紧：`target`；收紧另带 `expected_revision`；账号状态变更带 `account` 与 `target_state`（账号的目标状态是 `active` 时要 `.change`，否则 `.tighten`）；账号关联带 `employee`、`account`、`action`（`link` 要 `.change`，`unlink` 要 `.tighten`）与 `employee_version`；部署所有者确认另带 `basis: deployment_owner`、`expires_at` 与 `signature`。回答确认的 `id` 与 `expires_at`（201） |
+  | `GET /api/authz/confirmations/owner-payload?target=&expected_revision=` | 同上 | 部署所有者要签的内容（`owner-sign` 与种子用）；账号状态变更用 `?account=&target_state=`；账号关联用 `?employee=&account=&action=&employee_version=` |
 | `POST /api/authz/accounts/{principal}/reconfirm` | `.change`（受保护） | 待补确认的管理员持有资格补上确认：`confirmation`（另一名管理员对 `account` 与 `target_state: active` 的确认）；缺时答 202 `CONFIRMATION_REQUIRED`，成功 204 |
   | `GET /api/authz/changes/{change_key}` | `.change`、`.tighten` 或 `.relinquish` | 按变更键查询结果（键在调用者自己的命名空间里；没有绑定的答 `unbound`） |
   | `POST /api/authz/relinquishments` | `infra.authz.security_record.relinquish` | 放弃自己的一整条授予或管理持有资格（D82）：谁也不用授予，本组件给每个持有者一段固定的段 |
@@ -119,7 +121,7 @@
 
 | 方向 | 字段 | 做什么 |
 | --- | --- | --- |
-| `widen`（新记录） | `candidate`（带 `record_type`：`management_unit`、`management_holding`、`role_revision`、`grant`，可带 `valid` 与 `predecessor`）、`candidate_digest`、可选的 `effective_from` | 建新记录；带 `predecessor` 是续期或扩大（新记录必须包含旧的，生效时旧的以 `superseded` 结束）；`effective_from` 在未来的保存为待生效，到点由本组件进生效点 |
+| `widen`（新记录） | `candidate`（带 `record_type`：`management_unit`、`management_holding`、`role_revision`、`grant`，可带 `valid` 与 `predecessor`；授予与管理持有可带 `appointment`：员工成员的任职，3.0.46 起）、`candidate_digest`、可选的 `effective_from` | 建新记录；带 `predecessor` 是续期或扩大（新记录必须包含旧的，生效时旧的以 `superseded` 结束）；`effective_from` 在未来的保存为待生效，到点由本组件进生效点 |
 | `tighten` | `target`，可选的 `expected_state_revision`、`expected_revision` | 撤销或放弃整条记录 |
 | `tighten` | `target`、`candidate`、`candidate_digest` | 收窄：同一记录的新内容修订，候选必须在原内容之内 |
 | `tighten` | `target`、`termination`（`withdraw`、`cancel`、`reject`）、`expected_state_revision` | 终止尚未生效的记录（收回自己的申请、管理者取消、确认人拒绝） |
