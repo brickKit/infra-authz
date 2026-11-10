@@ -223,7 +223,7 @@ func view(m *core.Base, ctx context.Context, tx db.Tx, component string) (raw []
 		activeRole[r.ID] = true
 	}
 	lims := core.NewLimits(units)
-	disposed, err := effectpoint.ActiveDispositions(ctx, tx)
+	disposed, err := effectpoint.ActiveDispositions(m, ctx, tx)
 	if err != nil {
 		return
 	}

@@ -167,9 +167,13 @@ func recoveryReplace(m *core.Base, ctx context.Context, tx db.Tx, r RecoveryRequ
 			return errs.New(errs.ReasonRequestInvalid, "not an authorization admin holding: "+id)
 		}
 		disp := ids.New().String()
+		accounts, err := effectpoint.PersonAccounts(m, ctx, tx, h.Holder)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO authz_disposition (id, state, origin, subject, accounts, suspended_segments,
 			all_scope, domain, disposer, change) VALUES ($1, 'active', 'admin_recovery', $2, $3, '[]', true, $4, $5, $6)`,
-			disp, h.Holder, []string{h.Holder}, root, effectpoint.OwnerName, change); err != nil {
+			disp, h.Holder, accounts, root, effectpoint.OwnerName, change); err != nil {
 			return err
 		}
 		if _, err := effectpoint.Transition(m, ctx, tx, id, "held", "", "security_hold", change, ""); err != nil {

@@ -231,7 +231,11 @@ func dispositionConfirmations(m *core.Base, ctx context.Context, tx db.Tx, list 
 			}
 			continue
 		}
-		switch ok, err := ConfirmerEligible(m, ctx, tx, c.Confirmer, false); {
+		ok, err := Independent(m, ctx, tx, c.Confirmer, true, requester, d.Subject) // another natural person
+		if err == nil && ok == core.Proven {
+			ok, err = ConfirmerEligible(m, ctx, tx, c.Confirmer, false)
+		}
+		switch {
 		case err != nil:
 			return nil, err
 		case ok == core.Unprovable:

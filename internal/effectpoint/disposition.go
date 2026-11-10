@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	core "github.com/brickKit/infra-authz/v3/internal/core"
+	employment "github.com/brickKit/infra-authz/v3/internal/employment"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/db"
@@ -29,11 +30,21 @@ type disposition struct {
 	ID, Subject, Domain string
 	All                 bool // the person's every segment (identity-side dispositions)
 	Segments            []sdkauthz.Segment
+	accounts            []string // recorded with it: the subject's person then
 }
 
-// ActiveDispositions are the active dispositions by subject.
-func ActiveDispositions(ctx context.Context, tx db.Tx) (map[string][]disposition, error) {
-	rows, err := tx.Query(ctx, `SELECT id::text, subject, domain::text, all_scope, suspended_segments
+// PersonAccounts are a subject's accounts as one natural person (security 08's "账号集合"): the accounts linked to its
+// employee by the facts last applied, the subject always among them.
+func PersonAccounts(m *core.Base, ctx context.Context, tx db.Tx, subject string) ([]string, error) {
+	p, err := employment.PersonOf(m, ctx, tx, subject, false)
+	return p.Accounts, err
+}
+
+// ActiveDispositions are the active dispositions by account: each covers the accounts recorded with it and every
+// account linked since to the employee of one of them (security 08: an account linked after the disposition does
+// not escape it).
+func ActiveDispositions(m *core.Base, ctx context.Context, tx db.Tx) (map[string][]disposition, error) {
+	rows, err := tx.Query(ctx, `SELECT id::text, subject, domain::text, all_scope, suspended_segments, accounts
 		FROM authz_disposition WHERE state = 'active'`)
 	if err != nil {
 		return nil, err
@@ -41,7 +52,7 @@ func ActiveDispositions(ctx context.Context, tx db.Tx) (map[string][]disposition
 	ds, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (disposition, error) {
 		var d disposition
 		var raw []byte
-		if err := r.Scan(&d.ID, &d.Subject, &d.Domain, &d.All, &raw); err != nil {
+		if err := r.Scan(&d.ID, &d.Subject, &d.Domain, &d.All, &raw, &d.accounts); err != nil {
 			return d, err
 		}
 		return d, json.Unmarshal(raw, &d.Segments)
@@ -51,7 +62,19 @@ func ActiveDispositions(ctx context.Context, tx db.Tx) (map[string][]disposition
 	}
 	out := map[string][]disposition{}
 	for _, d := range ds {
-		out[d.Subject] = append(out[d.Subject], d)
+		covered := map[string]bool{d.Subject: true}
+		for _, a := range append([]string{d.Subject}, d.accounts...) {
+			now, err := PersonAccounts(m, ctx, tx, a)
+			if err != nil {
+				return nil, err
+			}
+			for _, x := range now {
+				covered[x] = true
+			}
+		}
+		for a := range covered {
+			out[a] = append(out[a], d)
+		}
 	}
 	return out, nil
 }
@@ -135,6 +158,8 @@ type dispositionIn struct {
 	Domain            string             `json:"domain,omitempty"`
 	SuspendedSegments []sdkauthz.Segment `json:"suspended_segments,omitempty"`
 	All               bool               `json:"all_scope,omitempty"`
+	// accounts: the subject's person (PersonAccounts), filled when the disposition is judged; recorded with it
+	accounts []string
 }
 
 const DispositionType = "security_disposition"
@@ -189,19 +214,27 @@ func disposing(m *core.Base, ctx context.Context, tx db.Tx, e Entry, s Standing,
 			return false, &ChangeResult{Outcome: "rejected", Reason: errs.ReasonContainmentNotProven, Detail: why}, nil
 		}
 	}
+	var err error
+	if in.accounts, err = PersonAccounts(m, ctx, tx, in.Subject); err != nil {
+		return false, nil, err
+	}
 	held, err := inScope(m, ctx, tx, s.units, in, domain)
 	if err != nil {
 		return false, nil, err
 	}
 	p.disp, p.recType = &plannedDisposition{in: in, domain: domain, records: held}, DispositionType
-	// the person an authorization admin: protected unless it is the requester itself; confirmations bind its admin
-	// holding at its revision
-	admins, err := AdminHoldingsOf(ctx, tx, in.Subject)
-	if err != nil {
-		return false, nil, err
+	// the person an authorization admin (by any of its accounts): protected unless it is the requester itself;
+	// confirmations bind its admin holding at its revision
+	var admins []string
+	for _, a := range in.accounts {
+		held, err := AdminHoldingsOf(ctx, tx, a)
+		if err != nil {
+			return false, nil, err
+		}
+		admins = append(admins, held...)
 	}
 	if len(admins) > 0 {
-		f.AffectsAdmins, f.TightenNeedsConfirmation = true, in.Subject != e.Requester
+		f.AffectsAdmins, f.TightenNeedsConfirmation = true, !slices.Contains(in.accounts, e.Requester)
 		t, err := LockTarget(ctx, tx, admins[0])
 		if err != nil {
 			return false, nil, err
@@ -256,7 +289,7 @@ func inScope(m *core.Base, ctx context.Context, tx db.Tx, units map[string]core.
 					return nil, err
 				}
 			}
-			if b.Grantee != in.Subject || !under(b.GovernanceUnit) {
+			if !slices.Contains(in.accounts, b.Grantee) || !under(b.GovernanceUnit) {
 				continue
 			}
 			if slices.ContainsFunc(segs, func(sg sdkauthz.Segment) bool { return Suspended(scope, sg, in.Subject) }) {
@@ -267,7 +300,7 @@ func inScope(m *core.Base, ctx context.Context, tx db.Tx, units map[string]core.
 			if err := json.Unmarshal(r.Body, &h); err != nil {
 				return nil, err
 			}
-			if h.Holder == in.Subject && under(h.Unit) {
+			if slices.Contains(in.accounts, h.Holder) && under(h.Unit) {
 				out = append(out, r.ID)
 			}
 		}
@@ -298,7 +331,7 @@ func dispose(m *core.Base, ctx context.Context, tx db.Tx, e Entry, p plan, chang
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO authz_disposition (id, state, origin, subject, accounts, suspended_segments,
 		all_scope, domain, disposer, confirmations, change) VALUES ($1, 'active', 'admin', $2, $3, $4, $5, $6, $7, $8, $9)`,
-		id, d.in.Subject, []string{d.in.Subject}, raw, d.in.All, d.domain, e.Requester, NonNil(p.confirmed), change); err != nil {
+		id, d.in.Subject, d.in.accounts, raw, d.in.All, d.domain, e.Requester, NonNil(p.confirmed), change); err != nil {
 		return ChangeResult{}, err
 	}
 	for _, r := range d.records {

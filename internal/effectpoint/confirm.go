@@ -10,6 +10,7 @@ import (
 	"time"
 
 	core "github.com/brickKit/infra-authz/v3/internal/core"
+	employment "github.com/brickKit/infra-authz/v3/internal/employment"
 
 	"github.com/brickKit/be-sdk-go/v3/audit"
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
@@ -348,8 +349,8 @@ func judgeConfirmation(m *core.Base, ctx context.Context, tx db.Tx, id string, t
 		}
 		return core.Proven, nil
 	}
-	if c.Confirmer == requester || c.Confirmer == object {
-		return core.Disproven, nil
+	if ind, err := Independent(m, ctx, tx, c.Confirmer, !lastApplied, requester, object); err != nil || ind != core.Proven {
+		return ind, err
 	}
 	return ConfirmerEligible(m, ctx, tx, c.Confirmer, lastApplied)
 }
@@ -373,6 +374,22 @@ func OthersAvailable(m *core.Base, ctx context.Context, tx db.Tx, requester, obj
 		}
 	}
 	return madeUnavailableBy(ctx, tx, requester, requester, object)
+}
+
+// Independent judges a confirmer against the people it must not be (the requester, the object; security 08:
+// "独立指不同的自然人"): Proven when the employee source proves it another natural person than every one of them,
+// Disproven when it is the same (the accounts linked to one employee are one person), Unprovable otherwise. fresh
+// false: by the facts last applied (row 22's exemption).
+func Independent(m *core.Base, ctx context.Context, tx db.Tx, confirmer string, fresh bool, people ...string) (core.Proof, error) {
+	switch same, err := employment.Shares(m, ctx, tx, confirmer, fresh, people...); {
+	case err != nil:
+		return core.Unprovable, err
+	case same == core.Proven:
+		return core.Disproven, nil
+	case same == core.Disproven:
+		return core.Proven, nil
+	}
+	return core.Unprovable, nil
 }
 
 // useConfirmations marks the confirmations used by the change that applied with them.

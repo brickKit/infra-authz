@@ -56,8 +56,11 @@ func ConfirmAccount(m *core.Base, ctx context.Context, tx db.Tx, confirmer strin
 	if !core.UUIDText.MatchString(in.Account) || !accountStates[in.TargetState] {
 		return "", time.Time{}, errs.New(errs.ReasonRequestInvalid, "an account's confirmation names the account and its target_state")
 	}
-	if confirmer == in.Account {
-		return "", time.Time{}, errs.New(errs.ReasonPermissionDenied, "nobody confirms a change of their own account")
+	if ok, err := effectpoint.Independent(m, ctx, tx, confirmer, false, in.Account); err != nil || ok == core.Disproven {
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		return "", time.Time{}, errs.New(errs.ReasonPermissionDenied, "nobody confirms a change of their own account (one person)")
 	}
 	version, err := projectedVersion(m, ctx, tx, in.Account)
 	if err != nil {
@@ -159,8 +162,6 @@ func accountVerdict(m *core.Base, ctx context.Context, tx db.Tx, in *authzv3.Che
 		return refused("the confirmation does not bind this account, status and version")
 	case !c.usable:
 		return refused("the confirmation is used or expired")
-	case c.confirmer == in.GetRequester() || c.confirmer == in.GetAccount():
-		return refused("the confirmer is the requester or the account itself")
 	case c.basis == effectpoint.BasisOwner:
 		if in.GetTargetState() != "active" {
 			return authzv3.AccountChangeVerdict_ACCOUNT_CHANGE_VERDICT_ALLOWED, "", nil // a tightening: the owner stands in
@@ -175,7 +176,16 @@ func accountVerdict(m *core.Base, ctx context.Context, tx db.Tx, in *authzv3.Che
 	}
 	// row 22's exemption: for a tightening of an account that is no admin, the second person is judged by the last
 	// applied facts (CP80); an admin's account needs a confirmer proven now, and one not provable decides nothing (CP92)
-	switch ok, err := effectpoint.ConfirmerEligible(m, ctx, tx, c.confirmer, !admin && in.GetTargetState() != "active"); {
+	lastApplied := !admin && in.GetTargetState() != "active"
+	switch ok, err := effectpoint.Independent(m, ctx, tx, c.confirmer, !lastApplied, in.GetRequester(), in.GetAccount()); {
+	case err != nil:
+		return 0, "", err
+	case ok == core.Disproven:
+		return refused("the confirmer is the requester or the account itself (one person)")
+	case ok == core.Unprovable:
+		return authzv3.AccountChangeVerdict_ACCOUNT_CHANGE_VERDICT_UNPROVABLE, "whether the confirmer is another person cannot be proven now", nil
+	}
+	switch ok, err := effectpoint.ConfirmerEligible(m, ctx, tx, c.confirmer, lastApplied); {
 	case err != nil:
 		return 0, "", err
 	case ok == core.Unprovable:
@@ -221,7 +231,14 @@ func AccountChanged(m *core.Base, ctx context.Context, tx db.Tx, principal strin
 		if err != nil {
 			return err
 		}
-		if valid = c != nil && c.usable && c.confirmer != principal; valid {
+		if valid = c != nil && c.usable; valid { // by the facts last applied: not the account's own person
+			ind, err := effectpoint.Independent(m, ctx, tx, c.confirmer, false, principal)
+			if err != nil {
+				return err
+			}
+			valid = ind != core.Disproven
+		}
+		if valid {
 			if _, err := tx.Exec(ctx, "UPDATE authz_confirmation SET consumed_by_change = $2 WHERE id = $1", rec.Confirmation,
 				"account:"+principal+"@"+strconv.FormatInt(rec.Version, 10)); err != nil {
 				return err

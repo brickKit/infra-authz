@@ -4,7 +4,7 @@
 
 ## 负责与不负责
 
-- 负责：表 `authz_employee_fact`（员工、任职、账号关联三种记录各一行：所属员工、关联的账号、状态、版本）；`Index`（投影 `Employees` 的 `Changed` 钩子调它，返回这次的事实与之前的状态，入口按它反应）。
+- 负责：表 `authz_employee_fact`（员工、任职、账号关联三种记录各一行：所属员工、关联的账号、状态、版本）；`Index`（投影 `Employees` 的 `Changed` 钩子调它，返回这次的事实与之前的状态，入口按它反应）；自然人（`PersonOf`：一个账号关联的员工此刻的全部有效账号，没有关联就是它自己；`fresh` 时要来源此刻证明，否则按最后应用的事实）与 `Shares`（确认人与一组账号或员工是不是同一个人：事实说是就算是，证明不了不是就答无法证明）。
 - 不负责：投影本身（入口建 `Base.Employees`）；关联确认的消耗（`accounts`）。
 
 ## 文件
@@ -12,11 +12,12 @@
 | 文件 | 内容 |
 | --- | --- |
 | `facts.go` | `Fact`、`Index`、三种记录的种类 |
+| `person.go` | `Person`、`PersonOf`、`Shares`、`EmployeeRef` |
 
 ## 依赖与被依赖
 
 - 依赖：`core`。
-- 被依赖：入口。
+- 被依赖：入口、`effectpoint`（`Independent`、处置的账号集合）、`accounts`。
 
 ## 规则在哪
 
@@ -24,4 +25,4 @@
 
 ## 测试
 
-`itest/employment_integration_test.go`（`TestTheEmployeeSource`）；改坏检查在装配项目 `dev/rebuild/c1-data/e4b-mutants.txt`。
+`itest/employment_integration_test.go`（`TestTheEmployeeSource`）、`itest/person_integration_test.go`（`TestOnePerson`）；改坏检查在装配项目 `dev/rebuild/c1-data/e4b-mutants.txt`、`e4d-mutants.txt`。

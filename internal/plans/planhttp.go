@@ -230,6 +230,8 @@ func secondConfirmer(m *core.Base, ctx context.Context, tx db.Tx, p *planRow, di
 			if err != nil || others {
 				continue
 			}
+		} else if ok, err := effectpoint.Independent(m, ctx, tx, confirmer, true, p.Initiator); err != nil || ok != core.Proven {
+			continue // the initiator's own person
 		} else if ok, err := effectpoint.ConfirmerEligible(m, ctx, tx, confirmer, false); err != nil || ok != core.Proven {
 			continue
 		}
@@ -250,8 +252,11 @@ func ConfirmPlan(m *core.Base, ctx context.Context, tx db.Tx, confirmer string, 
 	if p == nil || p.PreviewDigest == "" || in.PlanDigest == "" {
 		return "", time.Time{}, errs.New(errs.ReasonRequestInvalid, "a plan's confirmation names a previewed plan and the digest it confirms")
 	}
-	if confirmer == p.Initiator {
-		return "", time.Time{}, errs.New(errs.ReasonPermissionDenied, "the initiator does not confirm their own plan")
+	if ok, err := effectpoint.Independent(m, ctx, tx, confirmer, false, p.Initiator); err != nil || ok == core.Disproven {
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		return "", time.Time{}, errs.New(errs.ReasonPermissionDenied, "the initiator does not confirm their own plan (one person)")
 	}
 	until := *p.ExpiresAt
 	o := sdkauthz.OwnerConfirmation{Deployment: m.Deployment, Target: p.ID, ExpectedRevision: in.PlanDigest, ExpiresAt: canon.Time(until)}

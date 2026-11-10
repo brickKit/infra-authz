@@ -63,8 +63,13 @@ func ConfirmLink(m *core.Base, ctx context.Context, tx db.Tx, confirmer string, 
 	if err := linkArgs(in.Employee, in.Account, in.Action, version); err != nil {
 		return "", time.Time{}, err
 	}
-	if confirmer == in.Account {
-		return "", time.Time{}, errs.New(errs.ReasonPermissionDenied, "nobody confirms a link of their own account")
+	// nobody confirms a link of their own account, or of the employee they are (one person)
+	if ok, err := effectpoint.Independent(m, ctx, tx, confirmer, false, in.Account, employment.EmployeeRef(in.Employee)); err != nil ||
+		ok == core.Disproven {
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		return "", time.Time{}, errs.New(errs.ReasonPermissionDenied, "nobody confirms a link of their own account or employee")
 	}
 	admin, err := administrator(ctx, tx, in.Account)
 	if err != nil {
@@ -121,8 +126,6 @@ func linkVerdict(m *core.Base, ctx context.Context, tx db.Tx, in *authzv3.CheckL
 		return 0, "", err
 	case !c.usable:
 		return refused("the confirmation is used or expired")
-	case c.confirmer == in.GetRequester() || c.confirmer == in.GetAccount():
-		return refused("the confirmer is the requester or the account itself")
 	}
 	unlink := in.GetAction() == actionUnlink
 	if c.basis == effectpoint.BasisOwner {
@@ -141,7 +144,18 @@ func linkVerdict(m *core.Base, ctx context.Context, tx db.Tx, in *authzv3.CheckL
 	if err != nil {
 		return 0, "", err
 	}
-	switch ok, err := effectpoint.ConfirmerEligible(m, ctx, tx, c.confirmer, !admin && unlink); {
+	lastApplied := !admin && unlink
+	// another natural person than the requester, the account and the employee (the employee's accounts are one person)
+	switch ok, err := effectpoint.Independent(m, ctx, tx, c.confirmer, !lastApplied, in.GetRequester(), in.GetAccount(),
+		employment.EmployeeRef(in.GetEmployee())); {
+	case err != nil:
+		return 0, "", err
+	case ok == core.Disproven:
+		return refused("the confirmer is the requester, the account or the employee (one person)")
+	case ok == core.Unprovable:
+		return authzv3.AccountChangeVerdict_ACCOUNT_CHANGE_VERDICT_UNPROVABLE, "whether the confirmer is another person cannot be proven now", nil
+	}
+	switch ok, err := effectpoint.ConfirmerEligible(m, ctx, tx, c.confirmer, lastApplied); {
 	case err != nil:
 		return 0, "", err
 	case ok == core.Unprovable:

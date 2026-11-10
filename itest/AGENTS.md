@@ -49,6 +49,7 @@
 | `recoverystep_integration_test.go` | `TestTheRecoveryStepAfterTheReplay` | 整套恢复 6.4–6.5：来源水位、不变量检查、推迟的收紧 | `restore`（`recoverystep.go`） |
 | `employment_integration_test.go` | `TestTheEmployeeSource` | C1 E4b：员工成员的水位流是第二个内部来源：记录到达事实、变化替换事实、整套恢复 6.4 一起等它 | `employment`、入口、`restore` |
 | `links_integration_test.go` | `TestAccountLinks` | C1 E4c：关联的确认绑定员工、账号、动作与员工版本；员工成员先问、什么也不用掉；应用关联时用掉、只用一次；建立时所有者不能代替可用的管理员，结束时可以；`Administrators`；两个方法只答员工成员 | `accounts`、`confirmroutes` |
+| `person_integration_test.go` | `TestOnePerson` | C1 E4d：关联到同一员工的两个账号是一个人：互相确认不算（账号状态、记录的放宽）、不能确认本人员工的关联；一条关联结束后又是两个人；处置覆盖这个人的账号，之后关联进来的也逃不掉 | `employment`、`effectpoint`、`accounts`、`view` |
 | `grpcerrors_integration_test.go` | `TestSystemMethodsAnswerTheirReason` | 系统面的拒绝以它自己的原因到达调用方，不是 `INTERNAL` | 入口、`definitions` |
 
 共用的：

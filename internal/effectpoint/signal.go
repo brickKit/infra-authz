@@ -114,14 +114,18 @@ func GlobalDisposition(m *core.Base, ctx context.Context, tx db.Tx, principal, o
 	if root == "" {
 		return "", 0, nil
 	}
-	recs, err := inScope(m, ctx, tx, units, dispositionIn{Subject: principal, All: true}, root)
+	accounts, err := PersonAccounts(m, ctx, tx, principal)
+	if err != nil {
+		return "", 0, err
+	}
+	recs, err := inScope(m, ctx, tx, units, dispositionIn{Subject: principal, All: true, accounts: accounts}, root)
 	if err != nil {
 		return "", 0, err
 	}
 	id = ids.New().String()
 	if _, err := tx.Exec(ctx, `INSERT INTO authz_disposition (id, state, origin, subject, accounts, suspended_segments,
 		all_scope, domain, signal_ref, change) VALUES ($1, 'active', $2, $3, $4, '[]', true, $5, $6, $7)`,
-		id, origin, principal, []string{principal}, root, NonNil(refs), change); err != nil {
+		id, origin, principal, accounts, root, NonNil(refs), change); err != nil {
 		return "", 0, err
 	}
 	for _, r := range recs {
