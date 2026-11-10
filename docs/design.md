@@ -96,6 +96,8 @@
 
 ## 实现状态
 
+3.0.48（C1 的 E6，真机格的 L3 撞出）：授予或管理持有绑定一个本成员还没应用的任职（员工组件刚建、事件还在路上，或者根本没有）答可重试的 `AUTHORIZATION_UNPROVABLE`（503，不占变更键，同时催员工来源补取），不再是终局的 `REQUEST_INVALID`：终局的拒绝绑定变更键，任职到了之后同一个键再交也还是拒绝。任职已结束、账号没关联到它的员工仍是终局的拒绝。
+
 3.0.47：be-sdk-go alpha.121（全系统同一个 SDK 版本；sectest 的授权组件替身答 CheckLinkChange 与 Administrators）
 
 3.0.46（C1 的 E4，`contract-infra-authz` alpha.6）：

@@ -56,8 +56,17 @@ func TestAppointmentBindings(t *testing.T) {
 	plain := submitChange(t, w, sectest.Alice, grantReq("ap3", root, dave, []sdkauthz.Segment{orderSeg(region("north"))}), 200)
 	out := bound("ap4", carol, sales, "east", 400)
 	assert.Contains(t, out["detail"], "not linked", "%v", out)
-	out = bound("ap5", dave, ids.New().String(), "east", 400)
-	assert.Contains(t, out["detail"], "no appointment", "%v", out)
+	// an appointment this member has not applied yet (made at the source a moment ago, or never): not provable now,
+	// retryable, the change key left free; once it arrives the same key applies
+	fresh := ids.New().String()
+	out = bound("ap5", dave, fresh, "east", 503)
+	assert.Equal(t, "AUTHORIZATION_UNPROVABLE", out["reason"], "%v", out)
+	require.NoError(t, emp.appoint(ctx, fresh, dan, "active", 1))
+	require.Eventually(t, func() bool { return factOf(t, admin, fresh).Version == 1 }, 15*time.Second, 100*time.Millisecond)
+	late := bound("ap5", dave, fresh, "east", 200)
+	require.NoError(t, emp.appoint(ctx, fresh, dan, "ended", 2)) // not needed by what follows
+	require.Eventually(t, func() bool { return recordOf(t, admin, late["record"]).State == "ended" }, 10*time.Second,
+		100*time.Millisecond, "booked ended with it")
 	require.Eventually(t, func() bool { return slices.Equal(regions(dave), []string{"east", "north"}) }, 10*time.Second,
 		200*time.Millisecond, "the active appointment's grant gives access, the planned one's not yet")
 

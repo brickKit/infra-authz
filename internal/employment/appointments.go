@@ -41,8 +41,8 @@ func factOfBinding(ctx context.Context, tx db.Tx, b Binding) (bindingFact, error
 }
 
 // Grantable judges a new binding when a record is made (the effect point, at D_src_high): Proven when the appointment
-// is planned or active and the account linked to its employee, Disproven (with why) when the source proves otherwise,
-// Unprovable when it cannot prove either now.
+// is planned or active and the account linked to its employee, Disproven (with why) when the source proves otherwise
+// (ended, not linked), Unprovable when it cannot prove either now or does not know the appointment yet.
 func Grantable(m *core.Base, ctx context.Context, tx db.Tx, b Binding) (core.Proof, string, error) {
 	if m.Employees == nil {
 		return core.Disproven, "the deployment has no employee member: nothing binds an appointment", nil
@@ -65,8 +65,10 @@ func Grantable(m *core.Base, ctx context.Context, tx db.Tx, b Binding) (core.Pro
 		}
 	}
 	switch {
-	case !f.Known:
-		return core.Disproven, "no appointment " + b.Appointment, nil
+	case !f.Known: // made at the source a moment ago, or never: not known here is not proof of absence; retryable (the
+		// change key stays free, the same key applies once it arrives), and the source is asked for its watermark now
+		m.Employees.PullSoon()
+		return core.Unprovable, "the appointment " + b.Appointment + " is not known here (yet)", nil
 	case f.State != "planned" && f.State != "active":
 		return core.Disproven, "the appointment " + b.Appointment + " is " + f.State, nil
 	case f.Link == "":
