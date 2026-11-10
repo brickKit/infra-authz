@@ -23,7 +23,9 @@ type Base struct {
 	regText string
 	reg     Registry
 
-	Accounts                *projection.Watermarked
+	Accounts *projection.Watermarked
+	// Employees is the employee member's stream; nil when the deployment has none (EMPLOYEE_COMPONENT empty)
+	Employees               *projection.Watermarked
 	SrcHigh, SrcRead, Tight time.Duration
 	MaxDepth                int           // AUTHZ_MAX_UNIT_DEPTH (A131)
 	PlanMaxAge              time.Duration // AUTHZ_PLAN_MAX_AGE (A132)

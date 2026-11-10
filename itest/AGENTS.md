@@ -47,6 +47,7 @@
 | `evidence_integration_test.go` | `TestChangesLeaveEvidence` | 放宽生效时写一般证据；收紧先写意图、生效时写结论 | `effectpoint`（`change.go`） |
 | `evidence_integration_test.go` | `TestTheReplayAppliesTheEvidenceAgain` | 整套恢复 6.3：数据库回到之前，按提交顺序重放授予与撤销 | `restore`（`replay.go`） |
 | `recoverystep_integration_test.go` | `TestTheRecoveryStepAfterTheReplay` | 整套恢复 6.4–6.5：来源水位、不变量检查、推迟的收紧 | `restore`（`recoverystep.go`） |
+| `employment_integration_test.go` | `TestTheEmployeeSource` | C1 E4b：员工成员的水位流是第二个内部来源：记录到达事实、变化替换事实、整套恢复 6.4 一起等它 | `employment`、入口、`restore` |
 | `grpcerrors_integration_test.go` | `TestSystemMethodsAnswerTheirReason` | 系统面的拒绝以它自己的原因到达调用方，不是 `INTERNAL` | 入口、`definitions` |
 
 共用的：
@@ -56,6 +57,7 @@
 | `authz_integration_test.go` | `TestMemberEndToEnd`（各步的顺序）；`e2e`（运行中的部署、数据库、替身身份成员、`demo/orders` 的视图）；`startE2E`；`verify`、`segmentsOf`、`inView` |
 | `helpers_integration_test.go` | `dial`、`call`、`callAs`、`submitChange`、`listRecords`、`waitForView`、`portFree`；变更请求的构造（`widenReq`、`grantReq`、`unitReq`、`subUnitReq`） |
 | `identity_integration_test.go` | 替身身份成员（`iamModule`、`startIAM`）与账号状态的写入 |
+| `employment_integration_test.go` | 替身员工成员（`employeeModule`、`startEmployee`：员工、任职、关联的写入）；`startE2E(t, withEmployee)` 连它一起起 |
 | `owner_integration_test.go` | 部署所有者的密钥、确认与恢复的签名（`ownerConfirm`、`protect`、`ownerConfirmRelease`） |
 
 ## 加测试

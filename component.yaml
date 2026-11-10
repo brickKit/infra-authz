@@ -114,6 +114,12 @@ configSchema:
     DEPLOYMENT_ID:
       description: 'process-level: the same for every member of a shell'
       type: string
+    EMPLOYEE_COMPONENT:
+      description: 'the employee member''s component ID (mdm/employee), with EMPLOYEE_GRPC_URL; empty when the deployment has none: every account is then a person by itself and no record binds an appointment'
+      type: string
+    EMPLOYEE_GRPC_URL:
+      description: 'the employee member''s system surface ($endpoint:<member>:grpc); empty when the deployment has none'
+      type: string
     IAM_COMPONENT:
       description: 'the identity member''s component ID, e.g. infra/iam-casdoor (config/vars.yaml): the certificate it presents and the name of the account status source'
       type: string

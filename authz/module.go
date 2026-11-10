@@ -19,6 +19,7 @@ import (
 	confirmroutes "github.com/brickKit/infra-authz/v3/internal/confirmroutes"
 	core "github.com/brickKit/infra-authz/v3/internal/core"
 	effectpoint "github.com/brickKit/infra-authz/v3/internal/effectpoint"
+	employment "github.com/brickKit/infra-authz/v3/internal/employment"
 	plans "github.com/brickKit/infra-authz/v3/internal/plans"
 	restore "github.com/brickKit/infra-authz/v3/internal/restore"
 )
@@ -80,6 +81,9 @@ func New(rt *runtime.Runtime) (*Module, error) {
 	b.Accounts = &projection.Watermarked{Projection: projection.Projection{Name: core.Accounts, Changed: changed}, DB: rt.DB,
 		Source: iam, Stream: core.AccountStream, Deployment: b.Deployment, Freshness: b.SrcHigh, Pull: projection.PullClient{Conn: conn},
 		Snapshot: projection.RecordClient{Conn: conn, Stream: core.AccountStream.Name}, Log: rt.Logger}
+	if err := employees(b, rt); err != nil {
+		return nil, err
+	}
 	// the plans follow a record the effect point moves (an item waiting on it)
 	b.RecordMoved = func(ctx context.Context, tx db.Tx, record, state string) error {
 		return plans.FollowRecord(b, ctx, tx, record, state)
@@ -90,6 +94,9 @@ func New(rt *runtime.Runtime) (*Module, error) {
 // Subscriptions takes the account status stream, every event in position order (P9.19).
 func (m *Module) Subscriptions(s *events.Subscriptions) error {
 	s.Add(m.b.Accounts.Sub(core.Accounts))
+	if m.b.Employees != nil {
+		s.Add(m.b.Employees.Sub(core.Employees))
+	}
 	return nil
 }
 
@@ -159,6 +166,12 @@ func (m *Module) Start(ctx context.Context) error {
 		return err
 	}
 	go m.b.Accounts.Run(ctx)
+	if m.b.Employees != nil {
+		if err := m.b.Employees.Install(ctx); err != nil {
+			return err
+		}
+		go m.b.Employees.Run(ctx)
+	}
 	return m.b.RT.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
 		if _, err := tx.Exec(ctx, "INSERT INTO authz_state (instance) VALUES ($1) ON CONFLICT DO NOTHING", m.b.Instance); err != nil {
 			return err
@@ -189,4 +202,25 @@ func (m *Module) handler(f func(*core.Base, *httpx.Context) error) httpx.Handler
 // job adapts a module's job handler in the same way.
 func (m *Module) job(f func(*core.Base, context.Context, *work.Run) error) func(context.Context, *work.Run) error {
 	return func(ctx context.Context, r *work.Run) error { return f(m.b, ctx, r) }
+}
+
+// employees builds the projection of the employee member's stream when the deployment has one (EMPLOYEE_COMPONENT):
+// every record applied keeps its fact (employment.Index).
+func employees(b *core.Base, rt *runtime.Runtime) error {
+	emp := rt.Config.String("EMPLOYEE_COMPONENT")
+	if emp == "" {
+		return nil
+	}
+	conn, ok := rt.GRPCAt(emp, rt.Config.String("EMPLOYEE_GRPC_URL"))
+	if !ok {
+		return errs.New(errs.ReasonRequestInvalid, "EMPLOYEE_GRPC_URL cannot be dialled: the employee member's system surface")
+	}
+	changed := func(ctx context.Context, tx db.Tx, id string) error {
+		_, _, err := employment.Index(b, ctx, tx, id)
+		return err
+	}
+	b.Employees = &projection.Watermarked{Projection: projection.Projection{Name: core.Employees, Changed: changed}, DB: rt.DB,
+		Source: emp, Stream: core.EmployeeStream, Deployment: b.Deployment, Freshness: b.SrcHigh, Pull: projection.PullClient{Conn: conn},
+		Snapshot: projection.RecordClient{Conn: conn, Stream: core.EmployeeStream.Name}, Log: rt.Logger}
+	return nil
 }

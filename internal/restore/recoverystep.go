@@ -13,6 +13,7 @@ import (
 	"github.com/brickKit/be-sdk-go/v3/db"
 	"github.com/brickKit/be-sdk-go/v3/errs"
 	"github.com/brickKit/be-sdk-go/v3/evidence"
+	"github.com/brickKit/be-sdk-go/v3/projection"
 	authzv3 "github.com/brickKit/contract-infra-authz/v3/gen/go/be/authz/v3"
 	"github.com/jackc/pgx/v5"
 )
@@ -36,7 +37,8 @@ const ReplayForReview = "for_review"
 // originRecoveryReview is the disposition that closes a subject under review (security 09a).
 const originRecoveryReview = "recovery_review"
 
-// Sources answers whether the identity source's replay is applied (6.4).
+// Sources answers whether the internal sources' replays are applied (6.4): the identity member's account status, and
+// the employee member's stream when the deployment has one.
 func Sources(m *core.Base, ctx context.Context, in *authzv3.SourcesRequest) (*authzv3.SourcesResponse, error) {
 	var asOf time.Time
 	if in.GetSince() != "" {
@@ -46,29 +48,43 @@ func Sources(m *core.Base, ctx context.Context, in *authzv3.SourcesRequest) (*au
 		}
 		asOf = t
 	}
-	src := &authzv3.SourceState{Component: m.Accounts.Source, Stream: m.Accounts.Stream.Name}
+	sources := []*projection.Watermarked{m.Accounts}
+	if m.Employees != nil {
+		sources = append(sources, m.Employees)
+	}
+	out := &authzv3.SourcesResponse{AllApplied: true}
 	err := m.RT.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
+		out.Sources = nil
 		if asOf.IsZero() { // the moment on this member's primary clock, the clock of the watermark (P9.35)
 			if err := tx.QueryRow(ctx, "SELECT now()").Scan(&asOf); err != nil {
 				return err
 			}
 		}
-		j, err := m.Accounts.JudgeApplied(ctx, tx, map[string][]string{})
-		if err != nil {
-			return err
+		for _, w := range sources {
+			src := &authzv3.SourceState{Component: w.Source, Stream: w.Stream.Name}
+			j, err := w.JudgeApplied(ctx, tx, map[string][]string{})
+			if err != nil {
+				return err
+			}
+			src.State = j.SourceState
+			if src.Applied, err = w.NoOlderThan(ctx, tx, asOf); err != nil {
+				return err
+			}
+			out.Sources = append(out.Sources, src)
 		}
-		src.State = j.SourceState
-		src.Applied, err = m.Accounts.NoOlderThan(ctx, tx, asOf)
-		return err
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if !src.Applied {
-		m.Accounts.PullSoon() // a pull recorded after the moment: its echo comes after the source's replay
+	for i, src := range out.Sources {
+		if !src.Applied {
+			out.AllApplied = false
+			sources[i].PullSoon() // a pull recorded after the moment: its echo comes after the source's replay
+		}
 	}
-	return &authzv3.SourcesResponse{AsOf: asOf.UTC().Format(time.RFC3339Nano), Sources: []*authzv3.SourceState{src},
-		AllApplied: src.Applied}, nil
+	out.AsOf = asOf.UTC().Format(time.RFC3339Nano)
+	return out, nil
 }
 
 var errForReview = errors.New("no authorization admin would be provably available")

@@ -12,6 +12,8 @@ import (
 
 // ownKeys are the descriptions of the member's own keys in component.yaml.
 var ownKeys = map[string]string{
+	"EMPLOYEE_COMPONENT":           "the employee member's component ID (mdm/employee), with EMPLOYEE_GRPC_URL; empty when the deployment has none: every account is then a person by itself and no record binds an appointment",
+	"EMPLOYEE_GRPC_URL":            "the employee member's system surface ($endpoint:<member>:grpc); empty when the deployment has none",
 	"AUTHZ_INSTANCE":               "this member's instance identity: generated once at installation (a UUID), kept with the deployment's run files, never the same in two deployments; views carry it",
 	"AUTHZ_OWNER_KEY":              "the deployment owner's confirmation key (A124): an Ed25519 public key in PEM; its private key is kept offline by the owner and signs owner confirmations; absent, no owner confirmation is accepted. Not sensitive: a secret key so that file:// delivers it (or AUTHZ_OWNER_KEY_FILE)",
 	"AUTHZ_RECOVERY_KEY":           "the deployment owner's recovery key (A129): an Ed25519 public key in PEM, another key than AUTHZ_OWNER_KEY; its private key is kept offline and signs administrator recovery requests (cmd/recover); absent, no recovery is accepted. Not sensitive: a secret key so that file:// delivers it (or AUTHZ_RECOVERY_KEY_FILE)",

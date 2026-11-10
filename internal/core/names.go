@@ -55,6 +55,13 @@ var AccountStream = events.Stream{Name: "infra.iam.account_status", Partitions: 
 
 const Accounts = "accounts"
 
+// The employee member's stream (mdm/employee): employees, appointments and account links, a watermark source with the
+// record read (protocol 02). Optional: a deployment without an employee member has none, and then every account is
+// a person by itself and no record binds an appointment. The member keeps the projection Employees of it.
+var EmployeeStream = events.Stream{Name: "mdm.employee", Partitions: 4}
+
+const Employees = "employees"
+
 // Starting values of security 03's renewal and closing (D64): a view that depends on the source renews for high-risk
 // operations while its watermark is no older than SourceHigh, for ordinary reads no older than SourceRead; the
 // profile bounds what a customer may set.

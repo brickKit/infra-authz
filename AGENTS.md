@@ -9,7 +9,7 @@
 | 目录 | 是什么 |
 | --- | --- |
 | `main.go` | 单跑的入口 |
-| [`authz/`](authz/AGENTS.md) | 入口：组件定义、配置键与组装（建 `core.Base` 与账号状态的投影，路由、系统面、作业、订阅、启动、证据的重放与恢复核对都在这里登记，转给业务模块）；不写业务 |
+| [`authz/`](authz/AGENTS.md) | 入口：组件定义、配置键与组装（建 `core.Base`、账号状态与员工来源的投影，路由、系统面、作业、订阅、启动、证据的重放与恢复核对都在这里登记，转给业务模块）；不写业务 |
 | [`internal/`](internal/AGENTS.md) | 业务：下面的模块各一个包；模块之间的依赖表与分层在它的 `AGENTS.md` |
 | [`itest/`](itest/AGENTS.md) | 集成测试，按业务流程分文件；它的 `AGENTS.md` 是测试索引 |
 | `authz/migrations/` | 表 |
@@ -30,6 +30,7 @@
 | [`claim`](internal/claim/AGENTS.md) | 安装认领（A130） |
 | [`restore`](internal/restore/AGENTS.md) | 整套恢复：6.3 的重放、6.4–6.5 |
 | [`adminrecovery`](internal/adminrecovery/AGENTS.md) | 管理员恢复（A129） |
+| [`employment`](internal/employment/AGENTS.md) | 员工成员的水位流在本成员里的事实（关联与任职）；部署没有员工成员时没有 |
 | [`confirmroutes`](internal/confirmroutes/AGENTS.md) | 确认的两个路由：按对象的种类分给负责的模块 |
 
 共用的：[`core`](internal/core/AGENTS.md)（名字与资源定义、记录的字段与包含规则、有效段的求交、决策表、注册表、状态修订、`Base`）。

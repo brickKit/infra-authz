@@ -128,6 +128,7 @@ type e2e struct {
 	w                  *sectest.World
 	admin              *pgx.Conn
 	iam                *iamModule
+	emp                *employeeModule // with withEmployee
 	stopIAM            func()
 	pgPassword, busURL string
 	src                sdkauthz.GRPCSource
@@ -158,7 +159,10 @@ func (e *e2e) inView(p string) bool { return len(e.segmentsOf(p)) > 0 }
 
 // startE2E migrates and starts the member against PostgreSQL, the stand-in identity member and a bus of its own,
 // and waits until it verifies its own view.
-func startE2E(t *testing.T) *e2e {
+// withEmployee starts the stand-in employee member too, and the member with it as its employee source.
+const withEmployee = true
+
+func startE2E(t *testing.T, employee ...bool) *e2e {
 	pgPassword := os.Getenv("AUTHZ_IT_PG_PASSWORD")
 	if pgPassword == "" {
 		t.Fatal("AUTHZ_IT_PG_PASSWORD is not set")
@@ -169,7 +173,8 @@ func startE2E(t *testing.T) *e2e {
 	t.Cleanup(func() { admin.Close(ctx) })
 	itAdmin = admin
 	_, err = admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+itSchema+" CASCADE; CREATE SCHEMA "+itSchema+
-		"; DROP SCHEMA IF EXISTS "+iamSchema+" CASCADE; CREATE SCHEMA "+iamSchema+"; DROP SCHEMA IF EXISTS "+busSchema+" CASCADE; CREATE SCHEMA "+busSchema)
+		"; DROP SCHEMA IF EXISTS "+iamSchema+" CASCADE; CREATE SCHEMA "+iamSchema+"; DROP SCHEMA IF EXISTS "+empSchema+
+		" CASCADE; CREATE SCHEMA "+empSchema+"; DROP SCHEMA IF EXISTS "+busSchema+" CASCADE; CREATE SCHEMA "+busSchema)
 	require.NoError(t, err)
 	// the bus in its own schema, new for every run: a stream on a shared bus would bring events of earlier runs'
 	// deployments, and those block the source (P9.11)
@@ -182,7 +187,14 @@ func startE2E(t *testing.T) *e2e {
 	for _, p := range []string{sectest.Alice, sectest.Bob, carol, dave, eve} {
 		require.NoError(t, iam.set(ctx, p, "active", 1))
 	}
+	var emp *employeeModule
+	if len(employee) > 0 && employee[0] {
+		emp = startEmployee(t, w, pgPassword, busURL)
+	}
 	env := w.Env(t, core.ID)
+	if emp != nil {
+		env["EMPLOYEE_COMPONENT"], env["EMPLOYEE_GRPC_URL"] = empID, "http://"+empSystem
+	}
 	for k, v := range map[string]string{"COMPONENT_ID": core.ID, "COMPONENT_VERSION": core.Version, "PORT": itPort, "STOP_DRAIN_DELAY": "50ms",
 		"PG_HOST": "localhost", "PG_DATABASE": itDB, "PG_USER": "postgres", "PG_PASSWORD": pgPassword, "PG_SCHEMA": itSchema,
 		"PG_OWNER_USER": "postgres", "PG_OWNER_PASSWORD": pgPassword, "AUTHZ_INSTANCE": "authz-it-instance",
@@ -235,7 +247,7 @@ func startE2E(t *testing.T) *e2e {
 	require.Equal(t, 403, claimAs(sectest.Alice), "consumed")
 	waitForView(t, w, sectest.Alice) // the account projection aligned with the identity member: views renew
 
-	return &e2e{t: t, ctx: ctx, w: w, admin: admin, iam: iam, stopIAM: stopIAM, pgPassword: pgPassword, busURL: busURL}
+	return &e2e{t: t, ctx: ctx, w: w, admin: admin, iam: iam, emp: emp, stopIAM: stopIAM, pgPassword: pgPassword, busURL: busURL}
 }
 
 // definitionsAndViews: a component's definitions over mTLS, then its view through the SDK's own client.
