@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	core "github.com/brickKit/infra-authz/v3/internal/core"
+	employment "github.com/brickKit/infra-authz/v3/internal/employment"
 
 	"github.com/brickKit/be-sdk-go/v3/audit"
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
@@ -170,10 +171,20 @@ func HoldingsOf(ctx context.Context, tx db.Tx, principal string) ([]string, bool
 		if err := json.Unmarshal(r.Body, &h); err != nil {
 			return nil, false, err
 		}
-		if h.Holder == principal && !h.BackfillPending { // awaiting a reconfirmation: not available (T9d)
-			units = append(units, h.Unit)
-			admin = admin || h.SystemRole == "authorization_admin"
+		if h.Holder != principal || h.BackfillPending { // awaiting a reconfirmation: not available (T9d)
+			continue
 		}
+		if h.Appointment != "" { // bound to an appointment: by the facts last applied, until the closure ends it
+			held, err := employment.HeldApplied(ctx, tx, employment.Binding{Appointment: h.Appointment, Account: h.Holder})
+			if err != nil {
+				return nil, false, err
+			}
+			if !held {
+				continue
+			}
+		}
+		units = append(units, h.Unit)
+		admin = admin || h.SystemRole == "authorization_admin"
 	}
 	return units, admin, nil
 }

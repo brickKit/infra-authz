@@ -220,7 +220,10 @@ func employees(b *core.Base, rt *runtime.Runtime) error {
 		if err != nil || !ok {
 			return err
 		}
-		return accounts.LinkChanged(b, ctx, tx, f) // a link's confirmation used
+		if err := accounts.LinkChanged(b, ctx, tx, f); err != nil { // a link's confirmation used
+			return err
+		}
+		return employment.Closures(b, ctx, tx, f, effectpoint.CloseAfter) // what an ended appointment or link bound
 	}
 	b.Employees = &projection.Watermarked{Projection: projection.Projection{Name: core.Employees, Changed: changed}, DB: rt.DB,
 		Source: emp, Stream: core.EmployeeStream, Deployment: b.Deployment, Freshness: b.SrcHigh, Pull: projection.PullClient{Conn: conn},

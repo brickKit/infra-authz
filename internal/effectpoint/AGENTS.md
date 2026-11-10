@@ -30,7 +30,7 @@
 | `release.go` | 处置的解除：一次求完、`restore_pending`、谁能解除、绑定处置与修订的确认 |
 | `pending.go` | 待恢复：可用管理员可证明为零时进入并记下原因；读取接口 |
 | **闭包与约束** | |
-| `closure.go` | 影响闭包与依赖索引：来源收紧后按索引找出受影响的记录记账：`source_ended`、`source_narrowed`、`held`（`uncomputable`）、部分越界待复核；索引不完整时扫描并把来源域标为待复核；记录的到期 |
+| `closure.go` | 影响闭包与依赖索引（来源的种类：管理单元、角色修订、账号、任职）：来源收紧后按索引找出受影响的记录记账：`source_ended`、`source_narrowed`、`held`（`uncomputable`）、部分越界待复核；索引不完整时扫描并把来源域标为待复核；记录的到期 |
 | `budget.go` | 安全 07 的预算：一份授予的段数、值与树的项数、一个人在一个操作上的段数；授予、到点、恢复与解除处置时检查 |
 | `delegate.go` | 再下放与管理动作（09a 的 `management_actions`、`max_subdelegation_depth`，A131）：有效动作与层数沿父链求交，`managesWith` |
 | **单元测试** | |

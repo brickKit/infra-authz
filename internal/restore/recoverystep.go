@@ -8,6 +8,7 @@ import (
 
 	core "github.com/brickKit/infra-authz/v3/internal/core"
 	effectpoint "github.com/brickKit/infra-authz/v3/internal/effectpoint"
+	employment "github.com/brickKit/infra-authz/v3/internal/employment"
 
 	"github.com/brickKit/be-sdk-go/v3/audit"
 	"github.com/brickKit/be-sdk-go/v3/db"
@@ -221,7 +222,12 @@ func Check(m *core.Base, ctx context.Context, in *authzv3.CheckRequest) (*authzv
 			out.Unprovable = unprovable
 			return err
 		}
-		if err := keepAllBooks(m, ctx, tx, ended, out); err != nil {
+		unbound, unprovable, err := bindingsEnded(m, ctx, tx)
+		if err != nil || len(unprovable) > 0 {
+			out.Unprovable = unprovable
+			return err
+		}
+		if err := keepAllBooks(m, ctx, tx, ended, unbound, out); err != nil {
 			return err
 		}
 		for _, s := range in.GetReviewSubjects() {
@@ -281,12 +287,42 @@ func accountsEnded(m *core.Base, ctx context.Context, tx db.Tx) (map[string]bool
 	return ended, unprovable, nil
 }
 
+// bindingsEnded proves, for every effective or held grant or holding bound to an appointment, whether the employee
+// source shows the binding over (the appointment ended, the account unlinked); the accounts it cannot prove now are
+// listed (the check then judges nothing).
+func bindingsEnded(m *core.Base, ctx context.Context, tx db.Tx) (map[employment.Binding]bool, []string, error) {
+	rows, err := tx.Query(ctx, `SELECT DISTINCT body->>'appointment', coalesce(body->>'grantee', body->>'holder') FROM authz_record
+		WHERE state IN ('active', 'held') AND record_type IN ('grant', 'management_holding')
+			AND coalesce(body->>'appointment', '') <> '' ORDER BY 1, 2`)
+	if err != nil {
+		return nil, nil, err
+	}
+	list, err := pgx.CollectRows(rows, pgx.RowToStructByPos[employment.Binding])
+	if err != nil {
+		return nil, nil, err
+	}
+	unbound, unprovable := map[employment.Binding]bool{}, []string{}
+	for _, b := range list {
+		e, provable, err := employment.Ended(m, ctx, tx, b)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !provable {
+			unprovable = append(unprovable, b.Account)
+			continue
+		}
+		unbound[b] = e
+	}
+	return unbound, unprovable, nil
+}
+
 // keepAllBooks judges every effective or held record against its sources (the closure's table): the units first
 // until none moves (a unit's limit follows its parent's), then the holdings and the grants; the moves are counted.
-func keepAllBooks(m *core.Base, ctx context.Context, tx db.Tx, ended map[string]bool, out *authzv3.CheckResponse) error {
+func keepAllBooks(m *core.Base, ctx context.Context, tx db.Tx, ended map[string]bool, unbound map[employment.Binding]bool,
+	out *authzv3.CheckResponse) error {
 	world := func() (effectpoint.Sources, error) {
 		w, err := effectpoint.World(m, ctx, tx)
-		w.Ended = ended
+		w.Ended, w.Unbound = ended, unbound
 		return w, err
 	}
 	keep := func(w effectpoint.Sources, id string) (moved bool, err error) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	core "github.com/brickKit/infra-authz/v3/internal/core"
+	employment "github.com/brickKit/infra-authz/v3/internal/employment"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/db"
@@ -293,6 +294,9 @@ func widening(m *core.Base, ctx context.Context, tx db.Tx, requester, recType st
 		}
 		structural = s.managesWith(b.Unit, ActDelegate) && (b.SystemRole == "" || s.admin)
 		f.ManagementWiden, p.body = true, b
+		if bad, pre, err := bindable(m, ctx, tx, b.Appointment, b.Holder); bad != "" || pre != nil || err != nil {
+			return false, bad, pre, err
+		}
 		f.NeedsConfirmation = true // a protected operation: a management holding, a system role (security 08)
 	case "role_revision":
 		var b core.RoleBody
@@ -319,6 +323,9 @@ func widening(m *core.Base, ctx context.Context, tx db.Tx, requester, recType st
 		}
 		structural, p.body, segs, grantee = s.managesWith(b.GovernanceUnit, action), b, b.Segments, b.Grantee
 		lim = s.Limits.OfFor(b.GovernanceUnit, grantee)
+		if bad, pre, err := bindable(m, ctx, tx, b.Appointment, b.Grantee); bad != "" || pre != nil || err != nil {
+			return false, bad, pre, err
+		}
 	default:
 		return false, "record type " + recType + " is not in this version", nil, nil
 	}
@@ -335,6 +342,26 @@ func widening(m *core.Base, ctx context.Context, tx db.Tx, requester, recType st
 		}
 	}
 	return structural, "", nil, nil
+}
+
+// bindable checks a new record's appointment, when it names one (security 04): planned or active, its account linked
+// to the appointment's employee, at D_src_high; not provable now is retryable (a job's is processing).
+func bindable(m *core.Base, ctx context.Context, tx db.Tx, appointment, account string) (string, *ChangeResult, error) {
+	if appointment == "" {
+		return "", nil, nil
+	}
+	if !core.UUIDText.MatchString(appointment) {
+		return "appointment is an appointment's ID", nil, nil
+	}
+	switch ok, why, err := employment.Grantable(m, ctx, tx, employment.Binding{Appointment: appointment, Account: account}); {
+	case err != nil:
+		return "", nil, err
+	case ok == core.Disproven:
+		return why, nil, nil
+	case ok == core.Unprovable:
+		return "", &ChangeResult{Outcome: "rejected", Reason: errs.ReasonAuthorizationUnprovable, Detail: why, Retryable: true}, nil
+	}
+	return "", nil, nil
 }
 
 // supersedes reads the record a renewal or widening supersedes: it must be active and of the same type, and the new

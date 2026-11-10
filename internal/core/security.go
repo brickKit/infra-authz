@@ -33,6 +33,9 @@ type HoldingBody struct {
 	// BackfillPending is 09a's confirmation_backfill_pending: an admin account re-enabled without a valid
 	// confirmation; the holding is not available until a protected reconfirmation (T9d)
 	BackfillPending bool `json:"confirmation_backfill_pending,omitempty"`
+	// Appointment binds the holding to an appointment of the employee member (security 04): it counts while the
+	// appointment is active and the holder linked to its employee
+	Appointment string `json:"appointment,omitempty"`
 }
 
 type RoleBody struct {
@@ -46,6 +49,9 @@ type GrantBody struct {
 	Segments       []sdkauthz.Segment `json:"segments"`
 	GovernanceUnit string             `json:"governance_unit"`
 	IssuedBy       string             `json:"issued_by"`
+	// Appointment binds the grant to an appointment of the employee member (security 04, D30): it gives access while
+	// the appointment is active and the grantee linked to its employee; its end ends the grant
+	Appointment string `json:"appointment,omitempty"`
 }
 
 // Record is one active security record as read from the table.

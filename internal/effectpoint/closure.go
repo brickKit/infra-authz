@@ -8,6 +8,7 @@ import (
 	"time"
 
 	core "github.com/brickKit/infra-authz/v3/internal/core"
+	employment "github.com/brickKit/infra-authz/v3/internal/employment"
 
 	"github.com/brickKit/be-sdk-go/v3/audit"
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
@@ -39,6 +40,7 @@ func sourcesOf(recType string, body json.RawMessage) []source {
 		Parent         string `json:"parent"`
 		Unit           string `json:"unit"`
 		Holder         string `json:"holder"`
+		Appointment    string `json:"appointment"`
 	}
 	_ = json.Unmarshal(body, &b)
 	var out []source
@@ -52,11 +54,13 @@ func sourcesOf(recType string, body json.RawMessage) []source {
 		add("management_unit", b.GovernanceUnit, "ceiling")
 		add("role_revision", b.RoleRevision, "permission_basis")
 		add("account", b.Grantee, "eligibility")
+		add("appointment", b.Appointment, "eligibility")
 	case "management_unit":
 		add("management_unit", b.Parent, "ceiling")
 	case "management_holding":
 		add("management_unit", b.Unit, "ceiling")
 		add("account", b.Holder, "eligibility")
+		add("appointment", b.Appointment, "eligibility")
 	}
 	return out
 }
@@ -89,6 +93,7 @@ var dependentTypes = map[string][]string{
 	"management_unit": {"grant", "management_unit", "management_holding"},
 	"role_revision":   {"grant"},
 	"account":         {"grant", "management_holding"},
+	"appointment":     {"grant", "management_holding"},
 }
 
 // Closure runs one source's closure under the deployment's guard.
@@ -119,6 +124,11 @@ func Closure(m *core.Base, ctx context.Context, r *work.Run) error {
 		if err != nil {
 			return err
 		}
+		if a.Kind == "appointment" { // the appointment ended, or the account no longer linked to its employee
+			if err := unbound(m, ctx, tx, a.Ref, ids, &w); err != nil {
+				return err
+			}
+		}
 		for _, id := range ids {
 			if err := KeepBooks(m, ctx, tx, w, id, !scanned); err != nil {
 				return err
@@ -126,13 +136,39 @@ func Closure(m *core.Base, ctx context.Context, r *work.Run) error {
 		}
 		return nil
 	})
-	if errors.Is(err, errAccountUnprovable) {
+	if errors.Is(err, errAccountUnprovable) || errors.Is(err, errBindingUnprovable) {
 		return work.Wait(err)
 	}
 	return err
 }
 
-var errAccountUnprovable = errors.New("the account's status cannot be proven yet")
+var (
+	errAccountUnprovable = errors.New("the account's status cannot be proven yet")
+	errBindingUnprovable = errors.New("the appointment or the link cannot be proven yet")
+)
+
+// unbound judges the bindings of an appointment's dependents (security 04): the books wait for the employee source
+// to prove each.
+func unbound(m *core.Base, ctx context.Context, tx db.Tx, appointment string, ids []string, w *Sources) error {
+	w.Unbound = map[employment.Binding]bool{}
+	for _, id := range ids {
+		var account string
+		if err := tx.QueryRow(ctx, "SELECT coalesce(body->>'grantee', body->>'holder', '') FROM authz_record WHERE id = $1",
+			id).Scan(&account); err != nil {
+			return err
+		}
+		b := employment.Binding{Appointment: appointment, Account: account}
+		ended, provable, err := employment.Ended(m, ctx, tx, b)
+		if err != nil {
+			return err
+		}
+		if !provable {
+			return errBindingUnprovable
+		}
+		w.Unbound[b] = ended
+	}
+	return nil
+}
 
 // AccountEnded: the identity source proves the account ended as a source (security 08's closure: an account
 // disabled, or no longer there). A frozen account, or one disabled with a security mark, is an identity-side
@@ -206,6 +242,8 @@ type Sources struct {
 	limits *core.Limits
 	roles  map[string]bool
 	Ended  map[string]bool `json:"-"` // accounts proven ended (an account's closure)
+	// Unbound: bindings proven over (an appointment's closure): the appointment ended or the account unlinked
+	Unbound map[employment.Binding]bool `json:"-"`
 }
 
 func World(m *core.Base, ctx context.Context, tx db.Tx) (Sources, error) {
@@ -236,7 +274,8 @@ func assess(t *Target, w Sources) booked {
 	case "grant":
 		var b core.GrantBody
 		_ = json.Unmarshal(t.Body, &b)
-		if b.RoleRevision != "" && !w.roles[b.RoleRevision] || w.Ended[b.Grantee] {
+		if b.RoleRevision != "" && !w.roles[b.RoleRevision] || w.Ended[b.Grantee] ||
+			w.Unbound[employment.Binding{Appointment: b.Appointment, Account: b.Grantee}] {
 			return booked{state: "ended", endReason: "source_ended"}
 		}
 		return assessWithin(w, b.GovernanceUnit, b.Segments, b.Grantee)
@@ -250,7 +289,7 @@ func assess(t *Target, w Sources) booked {
 	case "management_holding":
 		var b core.HoldingBody
 		_ = json.Unmarshal(t.Body, &b)
-		if w.limits.Of(b.Unit) == nil || w.Ended[b.Holder] {
+		if w.limits.Of(b.Unit) == nil || w.Ended[b.Holder] || w.Unbound[employment.Binding{Appointment: b.Appointment, Account: b.Holder}] {
 			return booked{state: "ended", endReason: "source_ended"}
 		}
 	}

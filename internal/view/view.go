@@ -12,6 +12,7 @@ import (
 
 	core "github.com/brickKit/infra-authz/v3/internal/core"
 	effectpoint "github.com/brickKit/infra-authz/v3/internal/effectpoint"
+	employment "github.com/brickKit/infra-authz/v3/internal/employment"
 
 	sdkauthz "github.com/brickKit/be-sdk-go/v3/authz"
 	"github.com/brickKit/be-sdk-go/v3/canon"
@@ -227,14 +228,30 @@ func view(m *core.Base, ctx context.Context, tx db.Tx, component string) (raw []
 	if err != nil {
 		return
 	}
-	segsOf := map[string][]any{}
-	for _, g := range grants {
-		var b core.GrantBody
-		if err = json.Unmarshal(g.Body, &b); err != nil {
+	bodies := make([]core.GrantBody, len(grants))
+	var bindings []employment.Binding
+	for i, g := range grants {
+		if err = json.Unmarshal(g.Body, &bodies[i]); err != nil {
 			return
 		}
+		if a := bodies[i].Appointment; a != "" {
+			bindings = append(bindings, employment.Binding{Appointment: a, Account: bodies[i].Grantee})
+		}
+	}
+	// a grant bound to an appointment gives access while the employee source proves the appointment active and the
+	// grantee linked to its employee (security 04): ended, planned or unprovable, nothing
+	bound, err := employment.Effective(m, ctx, tx, bindings)
+	if err != nil {
+		return
+	}
+	segsOf := map[string][]any{}
+	for i, g := range grants {
+		b := bodies[i]
 		if b.RoleRevision != "" && !activeRole[b.RoleRevision] {
 			continue // its role revision is no longer effective: nothing (security 08)
+		}
+		if b.Appointment != "" && !bound[employment.Binding{Appointment: b.Appointment, Account: b.Grantee}] {
+			continue
 		}
 		// the effective segments (security 08): the grant's ∩ its governance unit's current limit, of keys registered,
 		// not retired and still defined by their owner
