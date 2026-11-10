@@ -96,10 +96,14 @@ func TestChangesLeaveEvidence(t *testing.T) {
 	// the same key again answers its bound result: no second conclusion, no second history row
 	var before, after int
 	require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_change_history").Scan(&before))
+	intents := len(evidenceFor(w, rec)["intent"])
 	code, _ = call(t, w, sectest.Alice, "POST", "/api/authz/tightenings", tightenReq("ev-t1", rec))
 	require.Equal(t, 200, code)
 	require.NoError(t, admin.QueryRow(ctx, "SELECT count(*) FROM "+itSchema+".be_change_history").Scan(&after))
 	assert.Equal(t, before, after, "a bound result again concludes nothing")
+	// the intent is written before the effect point, synchronously: a key already bound writes none (it would only be
+	// cancelled again)
+	assert.Equal(t, intents, len(evidenceFor(w, rec)["intent"]), "a bound key writes no intent")
 
 	// the evidence store down: a revocation applies all the same; its conclusion waits in the evidence outbox
 	g2 := submitChange(t, w, sectest.Alice, grantReq("ev-g2", root, sectest.Bob, seg), 200)

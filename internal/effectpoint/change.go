@@ -160,8 +160,19 @@ func changeAs(m *core.Base, ctx context.Context, requester string, req Request, 
 		selfOnly: selfOnly}
 	// a tightening's intent goes to the evidence before the effect point (assembly protocol 15, P12.16): never held
 	// back by it; the conclusion follows in the effect point's transaction, or cancelled when nothing applied
+	// A key already bound answers its bound result (row 1) or a conflict: no intent, which would only be cancelled. The
+	// look is without the guard; a key bound after it still cancels its intent, as before.
 	var pending *evidence.Pending
+	bound := false
 	if req.Direction == core.Tighten && m.RT.Evidence != nil {
+		if err := m.RT.DB.Tx(ctx, func(ctx context.Context, tx db.Tx) error {
+			return tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM authz_change WHERE requested_by = $1 AND change_key = $2)",
+				e.Namespace, e.Key).Scan(&bound)
+		}); err != nil {
+			return ChangeResult{}, err
+		}
+	}
+	if req.Direction == core.Tighten && m.RT.Evidence != nil && !bound {
 		if pending, err = m.RT.Evidence.Intent(ctx, "security_tightening", "", evidence.Object{Type: core.Records,
 			ID: req.Target, Version: RevisionValue(req.ExpectedStateRevision)}, EvidenceChange(requester, req)); err != nil {
 			return ChangeResult{}, err
