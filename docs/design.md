@@ -96,6 +96,8 @@
 
 ## 实现状态
 
+3.0.47：be-sdk-go alpha.121（全系统同一个 SDK 版本；sectest 的授权组件替身答 CheckLinkChange 与 Administrators）
+
 3.0.46（C1 的 E4，`contract-infra-authz` alpha.6）：
 
 - **写意图之前先查键**：同一个变更键重放的收紧不再在锁外先写意图、再取消；先不加锁查一次键的绑定，已绑定就直接答绑定的结果。
