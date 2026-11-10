@@ -17,7 +17,7 @@
 
 ## 依赖与被依赖
 
-- 依赖：`core`、`effectpoint`。
+- 依赖：`core`、`effectpoint`、`employment`。
 - 被依赖：入口（`services.go` 转发）。
 
 ## 规则在哪

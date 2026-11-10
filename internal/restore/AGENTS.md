@@ -16,7 +16,7 @@
 
 ## 依赖与被依赖
 
-- 依赖：`core`、`effectpoint`。
+- 依赖：`core`、`effectpoint`、`employment`。
 - 被依赖：入口（证据的重放、系统面）。
 
 ## 规则在哪
