@@ -11,6 +11,7 @@
 
 | 文件 | 内容 |
 | --- | --- |
+| `catalog.go` | `AttachmentCategories`：附件类别目录（契约 alpha.7）：现用定义里带类别的资源类型、属主、类别的规范 JSON、修订 |
 | `submit.go` | 上面全部 |
 | `submit_test.go` | 单元测试：交叉检查、逐份的规则（EN21、EN22、EN24） |
 

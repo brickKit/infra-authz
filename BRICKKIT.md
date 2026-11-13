@@ -86,6 +86,7 @@
 | `AUTHZ_INSTALL_CLAIM`、`AUTHZ_INSTALL_CLAIM_VALIDITY` | 安装认领与它的有效期 |
 | `IAM_GRPC_URL`、`IAM_COMPONENT`（必填） | 身份成员的系统面与组件 ID：账号状态从这里补取与读取 |
 | `EMPLOYEE_GRPC_URL`、`EMPLOYEE_COMPONENT` | 员工成员的系统面与组件 ID（可选）：关联与任职从这里补取与读取 |
+| `ATTACHMENT_COMPONENT` | 附件成员的组件 ID（可选，`infra/attachment`）：只有它能读附件类别目录；不配时谁也不答 |
 | `AUTHZ_SOURCE_HIGH`、`AUTHZ_SOURCE_READ` | `D_src_high`（起始 1 分钟，至多 5 分钟）与 `D_src_read`（起始 10 分钟，至多 1 小时，不短于前者）；调大即放宽撤权的上界，产品说明随之改写（安全 03） |
 | `AUTHZ_T_TIGHT` | `T_tight`（起始 1 小时）：身份来源停住时，一个人按最后已应用的事实办理收紧的水位年龄上限；超过后要第二人确认（安全 03） |
 | `AUTHZ_OWNER_KEY` | 部署所有者确认的公钥 |
@@ -96,7 +97,7 @@
 
 ## 契约索引
 
-- 系统面：`contract-infra-authz` 的 `be.authz.v3.ViewService/Verify`、`be.authz.v3.DefinitionService/Submit` 与 `be.authz.v3.AccountService/CheckAccountChange`（alpha.3 起，只许身份成员；`UNPROVABLE` 的回答 alpha.4 起）；`AccountService/CheckLinkChange`、`AccountService/Administrators`（alpha.6 起，3.0.46，只许员工成员）。成员的义务写在那个仓库的 README 里。
+- 系统面：`contract-infra-authz` 的 `be.authz.v3.ViewService/Verify`、`be.authz.v3.DefinitionService/Submit` 与 `be.authz.v3.AccountService/CheckAccountChange`（alpha.3 起，只许身份成员；`UNPROVABLE` 的回答 alpha.4 起）；`AccountService/CheckLinkChange`、`AccountService/Administrators`（alpha.6 起，3.0.46，只许员工成员）；`CatalogService/AttachmentCategories`（alpha.7 起，3.0.55，只许附件成员）。成员的义务写在那个仓库的 README 里。
 - 用户面：
 
   | 路由 | 操作 | 说明 |

@@ -81,6 +81,7 @@
 | 判断一次账号状态变更要不要确认（A134） | 系统面 `AccountService.CheckAccountChange`（只许身份成员） | `infra.authz.system.account_check` |
 | 判断一次账号关联的变更（建立、结束）有没有成立的确认 | 系统面 `AccountService.CheckLinkChange`（只许员工成员） | `infra.authz.system.account_check` |
 | 哪些账号是授权管理员（D62 的提示） | 系统面 `AccountService.Administrators`（只许员工成员） | `infra.authz.system.account_check` |
+| 附件类别目录（协议 12：类别经本组件的定义目录到附件组件） | 系统面 `CatalogService.AttachmentCategories`（只许附件成员，配置 `ATTACHMENT_COMPONENT`） | `infra.authz.system.catalog_read` |
 | 管理员账号的补确认 | 用户面 `POST /api/authz/accounts/{principal}/reconfirm` | `infra.authz.security_record.change`（受保护） |
 
 设计上还有：批量计划（一次改一批授予）、查询编译所需的段（给 SDK 编译数据范围）、能力声明（安全 09b，装配准入据此检查）。
@@ -95,6 +96,8 @@
 - `mdm/org`（可选）：法人与部门维度，缺时这两个维度不可用；`mdm/employee`（可选，3.0.46 起）：第二个内部来源（水位流 `mdm.employee`，投影 `employees`，配置 `EMPLOYEE_COMPONENT`、`EMPLOYEE_GRPC_URL`），给出账号与员工的关联与任职；缺时每个账号自成一人、没有记录能绑定任职，`CheckLinkChange` 与 `Administrators` 不答任何调用方；`infra/audit`（可选，兼任证据存储）：收紧的意图在本地事务之外写入，缺或不可达时收紧照样生效，完整记录进入外部告警（协议 15）。内部来源按水位探测取得新鲜度（安全 03）。
 
 ## 实现状态
+
+3.0.55（装配项目阶段计划 C9）：附件类别目录 `CatalogService.AttachmentCategories`（契约 alpha.7）：每个组件现在用的定义版本里声明了附件类别的资源类型、属主组件（提交它的组件：只有登记的属主的定义被接受）与类别的规范 JSON；修订是各组件“组件@版本”的摘要，调用方带着没变时答“未变”；只许 `ATTACHMENT_COMPONENT` 调用（没配时谁也不答）。be-sdk-go alpha.130。
 
 3.0.54：be-sdk-go alpha.129（全系统同一个 SDK 版本；线协议 alpha.126：通知意图第 18 章一致性考试的修正，装配项目阶段计划 C8）及随之连锁的版本；本组件行为不变。
 

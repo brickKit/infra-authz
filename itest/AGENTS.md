@@ -51,6 +51,7 @@
 | `links_integration_test.go` | `TestAccountLinks` | C1 E4c：关联的确认绑定员工、账号、动作与员工版本；员工成员先问、什么也不用掉；应用关联时用掉、只用一次；建立时所有者不能代替可用的管理员，结束时可以；`Administrators`；两个方法只答员工成员 | `accounts`、`confirmroutes` |
 | `person_integration_test.go` | `TestOnePerson` | C1 E4d：关联到同一员工的两个账号是一个人：互相确认不算（账号状态、记录的放宽）、不能确认本人员工的关联；一条关联结束后又是两个人；处置覆盖这个人的账号，之后关联进来的也逃不掉 | `employment`、`effectpoint`、`accounts`、`view` |
 | `appointments_integration_test.go` | `TestAppointmentBindings` | C1 E4e：授予与管理持有绑定任职：授出时账号要关联到任职的员工、任职计划中或在职，还没应用的任职答可重试、到了之后同一个键生效；在职才给；调岗（旧任职结束、新的开始）后旧的立即不给、闭包记为 `source_ended`；关联结束时通过任职的全部结束；不绑定任职的授予不受影响 | `employment`、`effectpoint`、`view` |
+| `catalog_integration_test.go` | `TestTheAttachmentCategoryCatalog` | C9：附件成员读得到带类别的定义（属主、类别）、同一修订答“未变”、新版本改变修订、别的组件被拒 | `definitions`（`catalog.go`） |
 | `grpcerrors_integration_test.go` | `TestSystemMethodsAnswerTheirReason` | 系统面的拒绝以它自己的原因到达调用方，不是 `INTERNAL` | 入口、`definitions` |
 
 共用的：
