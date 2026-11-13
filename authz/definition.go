@@ -57,6 +57,9 @@ func Keys() []config.Key {
 		// when the deployment has none (every account is then a person by itself, no record binds an appointment)
 		{Name: "EMPLOYEE_GRPC_URL", Type: config.String},
 		{Name: "EMPLOYEE_COMPONENT", Type: config.String},
+		// the attachment member (infra/attachment), optional: its component ID, the only caller of the attachment
+		// category catalog; empty when the deployment has none
+		{Name: "ATTACHMENT_COMPONENT", Type: config.String},
 		// D_src_high and D_src_read (security 03): the watermark ages at which high-risk operations, then ordinary
 		// reads, close for views that depend on the identity source
 		{Name: "AUTHZ_SOURCE_HIGH", Type: config.Duration, Default: core.DefaultSourceHigh},

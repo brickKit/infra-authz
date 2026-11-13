@@ -10,7 +10,7 @@ import (
 // Identity of the component.
 const (
 	ID      = "infra/authz"
-	Version = "3.0.54"
+	Version = "3.0.55"
 )
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.
@@ -39,6 +39,8 @@ const (
 	OpAccountCheck = "infra.authz.system.account_check"
 	// OpReplay is the replay of this member's evidence in a full recovery (be-protocol P12.19: the recovery tool only).
 	OpReplay = "infra.authz.system.replay"
+	// OpCatalogRead is CatalogService.AttachmentCategories: the attachment member only (contract alpha.7)
+	OpCatalogRead = "infra.authz.system.catalog_read"
 	// OpRecover is a full recovery's checks (be-protocol chapter 14: the recovery tool only).
 	OpRecover = "infra.authz.system.recover"
 	// OpClaim consumes the install claim: nobody is granted it, the claim itself says who may (A130)
@@ -106,6 +108,7 @@ func Definitions() *sdkauthz.Definitions {
 			{Key: OpVerify, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpSubmit, ResourceType: System, Purpose: "manage", RiskClass: "low", SideEffects: []string{"security_change"}},
 			{Key: OpAccountCheck, ResourceType: System, Purpose: "read", RiskClass: "low"},
+			{Key: OpCatalogRead, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpReplay, ResourceType: System, Purpose: "action", RiskClass: "high", SideEffects: []string{"business_write"}},
 			{Key: OpRecover, ResourceType: System, Purpose: "read", RiskClass: "low"},
 			{Key: OpClaim, ResourceType: System, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},

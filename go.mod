@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/brickKit/be-sdk-go/v3 v3.0.0-alpha.129
-	github.com/brickKit/contract-infra-authz/v3 v3.0.0-alpha.6
+	github.com/brickKit/contract-infra-authz/v3 v3.0.0-alpha.7
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/stretchr/testify v1.12.1
 	google.golang.org/grpc v1.83.2

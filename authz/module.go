@@ -31,6 +31,7 @@ type Module struct {
 	authzv3.UnimplementedDefinitionServiceServer
 	authzv3.UnimplementedAccountServiceServer
 	authzv3.UnimplementedRecoveryServiceServer
+	authzv3.UnimplementedCatalogServiceServer
 	b *core.Base
 }
 

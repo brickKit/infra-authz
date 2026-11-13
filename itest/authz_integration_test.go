@@ -69,6 +69,7 @@ const registryTSV = "kind\tkey\towner_component\n" +
 	"permission\tinfra.authz.system.account_check\tinfra/authz\n" +
 	"permission\tinfra.authz.system.claim\tinfra/authz\n" +
 	"permission\tinfra.authz.system.replay\tinfra/authz\n" +
+	"permission\tinfra.authz.system.catalog_read\tinfra/authz\n" +
 	"permission\tinfra.authz.system.recover\tinfra/authz\n" +
 	"resource_type\tdemo.order\tdemo/orders\npermission\tdemo.order.read\tdemo/orders\n" +
 	"resource_type\tdemo.invoice\tdemo/invoices\npermission\tdemo.invoice.read\tdemo/invoices\n" +
@@ -198,6 +199,7 @@ func startE2E(t *testing.T, employee ...bool) *e2e {
 	for k, v := range map[string]string{"COMPONENT_ID": core.ID, "COMPONENT_VERSION": core.Version, "PORT": itPort, "STOP_DRAIN_DELAY": "50ms",
 		"PG_HOST": "localhost", "PG_DATABASE": itDB, "PG_USER": "postgres", "PG_PASSWORD": pgPassword, "PG_SCHEMA": itSchema,
 		"PG_OWNER_USER": "postgres", "PG_OWNER_PASSWORD": pgPassword, "AUTHZ_INSTANCE": "authz-it-instance",
+		"ATTACHMENT_COMPONENT": "infra/attachment",
 		"AUTHZ_REGISTRY": registryTSV, "AUTHZ_INSTALL_CLAIM": "principal:" + sectest.Alice, "BUS_URL": busURL,
 		"IAM_GRPC_URL": "http://" + iamSystem, "IAM_COMPONENT": iamID, "AUTHZ_SOURCE_HIGH": "3s", "AUTHZ_SOURCE_READ": "6s",
 		"AUTHZ_T_TIGHT":            itTight.String(),

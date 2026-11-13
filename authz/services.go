@@ -30,6 +30,14 @@ func (m *Module) Services(s *grpcx.Services) error {
 		"CheckAccountChange": {Operation: core.OpAccountCheck, Callers: []string{m.b.RT.Config.String("IAM_COMPONENT")}},
 		"CheckLinkChange":    {Operation: core.OpAccountCheck, Callers: employee},
 		"Administrators":     {Operation: core.OpAccountCheck, Callers: employee}})
+	// the attachment member reads the attachment categories (contract alpha.7, assembly protocol 12); a deployment
+	// without one names nobody
+	attachment := []string{m.b.RT.Config.String("ATTACHMENT_COMPONENT")}
+	if attachment[0] == "" {
+		attachment = []string{noEmployeeMember}
+	}
+	s.Register(&authzv3.CatalogService_ServiceDesc, m, map[string]grpcx.Method{
+		"AttachmentCategories": {Operation: core.OpCatalogRead, Callers: attachment}})
 	// a full recovery's 6.4-6.5 after the replay (A142): the replay's operation, the tool only
 	tool := []string{restore.RecoveryTool}
 	s.Register(&authzv3.RecoveryService_ServiceDesc, m, map[string]grpcx.Method{
@@ -39,8 +47,8 @@ func (m *Module) Services(s *grpcx.Services) error {
 	return nil
 }
 
-// noEmployeeMember is the caller the employee member's methods name when the deployment has none: no component's
-// certificate carries it.
+// noEmployeeMember is the caller the employee member's (or the attachment member's) methods name when the deployment
+// has none: no component's certificate carries it.
 const noEmployeeMember = "-"
 
 // CheckLinkChange answers whether a confirmation holds for an account link's change (the accounts module).
@@ -79,4 +87,9 @@ func (m *Module) ReplayDeferred(ctx context.Context, in *authzv3.ReplayDeferredR
 
 func (m *Module) Check(ctx context.Context, in *authzv3.CheckRequest) (*authzv3.CheckResponse, error) {
 	return restore.Check(m.b, ctx, in)
+}
+
+// AttachmentCategories answers the attachment category catalog (the definitions module).
+func (m *Module) AttachmentCategories(ctx context.Context, in *authzv3.AttachmentCategoriesRequest) (*authzv3.AttachmentCategoriesResponse, error) {
+	return definitions.AttachmentCategories(m.b, ctx, in)
 }
