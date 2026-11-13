@@ -10,7 +10,7 @@ import (
 // Identity of the component.
 const (
 	ID      = "infra/authz"
-	Version = "3.0.57"
+	Version = "3.0.58"
 )
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.
