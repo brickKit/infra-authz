@@ -84,13 +84,14 @@ func OwnOperations(m *core.Base, ctx context.Context, principal string) ([]strin
 
 // OwnOperationsHTTP is GET /api/authz/me/operations (A177), the authorization family's standard read
 // (contract-infra-authz). Its operation is decided on the caller's own fixed segment; a caller without one holds no
-// grant or holding at all, and the answer is that it holds nothing.
+// grant or holding at all, and the answer is that it holds nothing. The answer names the caller (the verified
+// principal): a front end keeps its drafts per user by it (3.0.61).
 func OwnOperationsHTTP(m *core.Base, c *httpx.Context) error {
 	s, _ := sdkauthz.From(c.Ctx())
 	u, _ := identity.UserFrom(c.Ctx())
 	ctx, _, err := s.Check(c.Ctx(), core.OpOwnOperations, sdkauthz.Facts{core.Holder: {State: "value", Value: u.Subject}})
 	if errs.Is(err, "be", errs.ReasonNotFound) || errs.Is(err, "be", errs.ReasonPermissionDenied) {
-		return c.JSON(200, map[string]any{"operations": []string{}})
+		return c.JSON(200, map[string]any{"principal": u.Subject, "operations": []string{}})
 	}
 	if err != nil {
 		return err
@@ -99,5 +100,5 @@ func OwnOperationsHTTP(m *core.Base, c *httpx.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(200, map[string]any{"operations": ops})
+	return c.JSON(200, map[string]any{"principal": u.Subject, "operations": ops})
 }

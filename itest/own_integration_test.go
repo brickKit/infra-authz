@@ -24,6 +24,7 @@ func testOwnOperations(t *testing.T, w *sectest.World, root string) {
 		require.Equal(t, 200, code, "%v", out)
 		ops, ok := out["operations"].([]any)
 		require.True(t, ok, "operations is a list: %v", out)
+		require.Equal(t, who, out["principal"], "the answer names the caller")
 		return ops
 	}
 	assert.Empty(t, own(nobody), "no grant, no holding: nothing")

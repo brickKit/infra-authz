@@ -98,6 +98,8 @@
 
 ## 实现状态
 
+3.0.61：“我的操作”的回答带调用者的主体 `principal`（前端按它隔离草稿，装配项目阶段计划 C12 的 P4）。
+
 3.0.60：调用者自己的操作键（A177，装配项目阶段计划 C12 的 P2b）：`GET /api/authz/me/operations`，操作 `infra.authz.security_record.own_operations` 像 `.relinquish` 一样是每个持有者的固定段；视图的计算拆成全部署共用的事实（`readFacts`）与按组件、可只算一个主体的有效段（`segments`），视图与这条读取共用它，所以两边的口径不会分开。
 
 3.0.59：be-sdk-go alpha.134（全系统同一个 SDK 版本；SDK 加了组件的公网前缀，用户面路由必须在前缀下，线协议 alpha.131 的 P11.11，装配项目阶段计划 C11）及随之连锁的版本；本组件行为不变。
