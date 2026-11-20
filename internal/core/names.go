@@ -10,7 +10,7 @@ import (
 // Identity of the component.
 const (
 	ID      = "infra/authz"
-	Version = "3.0.59"
+	Version = "3.0.60"
 )
 
 // The member's own resource and operations: the security records on the user surface, the two system methods.
@@ -24,6 +24,9 @@ const (
 	// OpRelinquish ends one's own grant or holding (D82): nobody grants it, the member's own view gives every holder a
 	// fixed segment of it
 	OpRelinquish = "infra.authz.security_record.relinquish"
+	// OpOwnOperations reads the operation keys the caller holds (A177): like OpRelinquish nobody grants it, every holder
+	// gets a fixed segment; for display only (the frontends' menus), every operation is still decided where it runs
+	OpOwnOperations = "infra.authz.security_record.own_operations"
 	// Dispositions (security 08's security dispositions, A128): who may dispose and release within the management
 	// limit; dispose only reduces access, release restores it
 	Dispositions = "infra.authz.security_disposition"
@@ -99,6 +102,7 @@ func Definitions() *sdkauthz.Definitions {
 				Audit: true, TighteningOnly: true},
 			{Key: OpRelinquish, ResourceType: Records, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
 				Audit: true, TighteningOnly: true},
+			{Key: OpOwnOperations, ResourceType: Records, Purpose: "read", RiskClass: "low"},
 			{Key: OpDispRead, ResourceType: Dispositions, Purpose: "read", RiskClass: "low"},
 			{Key: OpDispose, ResourceType: Dispositions, Purpose: "manage", RiskClass: "high", SideEffects: []string{"security_change"},
 				Audit: true, TighteningOnly: true},

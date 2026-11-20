@@ -192,6 +192,115 @@ func accountsOf(m *core.Base, ctx context.Context, tx db.Tx, principals []string
 	return out, r, unprovable, nil
 }
 
+// facts are the committed records every component's segments are computed from, read once for all of them.
+type facts struct {
+	grants     []core.Record
+	bodies     []core.GrantBody
+	activeRole map[string]bool
+	bound      map[employment.Binding]bool
+	lims       *core.Limits
+	suspended  func(principal string, s sdkauthz.Segment) bool // a segment an active disposition suspends (security 08)
+	reg        core.Registry
+}
+
+func readFacts(m *core.Base, ctx context.Context, tx db.Tx) (f facts, err error) {
+	if f.grants, err = core.Active(ctx, tx, "grant"); err != nil {
+		return
+	}
+	units, err := effectpoint.Units(m, ctx, tx)
+	if err != nil {
+		return
+	}
+	if f.reg, err = core.RegistryNow(m); err != nil {
+		return
+	}
+	roles, err := core.Active(ctx, tx, "role_revision")
+	if err != nil {
+		return
+	}
+	f.activeRole = map[string]bool{}
+	for _, r := range roles {
+		f.activeRole[r.ID] = true
+	}
+	f.lims = core.NewLimits(units)
+	disposed, err := effectpoint.ActiveDispositions(m, ctx, tx)
+	if err != nil {
+		return
+	}
+	f.suspended = func(p string, s sdkauthz.Segment) bool { return effectpoint.Suspended(disposed[p], s, p) }
+	f.bodies = make([]core.GrantBody, len(f.grants))
+	var bindings []employment.Binding
+	for i, g := range f.grants {
+		if err = json.Unmarshal(g.Body, &f.bodies[i]); err != nil {
+			return
+		}
+		if a := f.bodies[i].Appointment; a != "" {
+			bindings = append(bindings, employment.Binding{Appointment: a, Account: f.bodies[i].Grantee})
+		}
+	}
+	// a grant bound to an appointment gives access while the employee source proves the appointment active and the
+	// grantee linked to its employee (security 04): ended, planned or unprovable, nothing
+	f.bound, err = employment.Effective(m, ctx, tx, bindings)
+	return
+}
+
+// segments gives each effective segment of a component's view (security 08) to emit with its principal and source
+// record; only, when not empty, keeps one principal. The views and a caller's own operations both come from here.
+func segments(ctx context.Context, tx db.Tx, f facts, component string, defs Defined, only string,
+	emit func(principal string, s sdkauthz.Segment, source string) error) error {
+	for i, g := range f.grants {
+		b := f.bodies[i]
+		if only != "" && b.Grantee != only {
+			continue
+		}
+		if b.RoleRevision != "" && !f.activeRole[b.RoleRevision] {
+			continue // its role revision is no longer effective: nothing (security 08)
+		}
+		if b.Appointment != "" && !f.bound[employment.Binding{Appointment: b.Appointment, Account: b.Grantee}] {
+			continue
+		}
+		// the effective segments (security 08): the grant's ∩ its governance unit's current limit, of keys registered,
+		// not retired and still defined by their owner
+		for _, s := range f.lims.OfFor(b.GovernanceUnit, b.Grantee).Cut(b.Segments, b.Grantee) {
+			// a segment that meets a scope an active disposition suspends is left out whole (security 08)
+			if !defs.Usable(s, f.reg) || f.suspended(b.Grantee, s) {
+				continue
+			}
+			if err := emit(b.Grantee, s, g.ID); err != nil {
+				return err
+			}
+		}
+	}
+	if component != core.ID {
+		return nil
+	}
+	// D82: every holder may see and relinquish its own records, and read its own operations (A177); nobody grants it
+	firstOf, err := holders(ctx, tx, f.grants)
+	if err != nil {
+		return err
+	}
+	self := map[string]sdkauthz.Atom{core.Holder: {Kind: "self"}}
+	for p, src := range firstOf {
+		if only != "" && p != only {
+			continue
+		}
+		for _, s := range []sdkauthz.Segment{
+			{ResourceType: core.Records, Operation: core.OpRead, Atoms: self, ReadFields: []string{"body", "id", "record_type", "state"},
+				Valid: sdkauthz.Window{From: relinquishFrom}},
+			{ResourceType: core.Records, Operation: core.OpRelinquish, Atoms: self, Valid: sdkauthz.Window{From: relinquishFrom}},
+			{ResourceType: core.Records, Operation: core.OpOwnOperations, Atoms: self, Valid: sdkauthz.Window{From: relinquishFrom}},
+		} {
+			if !defs.Usable(s, f.reg) || f.suspended(p, s) {
+				continue
+			}
+			if err := emit(p, s, src); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // view computes a component's shard from the committed records: canonical bytes and their digest (D76), and how the
 // answer may renew it.
 func view(m *core.Base, ctx context.Context, tx db.Tx, component string) (raw []byte, digest string, st core.State, ok bool,
@@ -203,88 +312,15 @@ func view(m *core.Base, ctx context.Context, tx db.Tx, component string) (raw []
 	if err != nil || !ok {
 		return nil, "", st, false, renewNone, err
 	}
-	grants, err := core.Active(ctx, tx, "grant")
-	if err != nil {
-		return
-	}
-	units, err := effectpoint.Units(m, ctx, tx)
-	if err != nil {
-		return
-	}
-	reg, err := core.RegistryNow(m)
-	if err != nil {
-		return
-	}
-	roles, err := core.Active(ctx, tx, "role_revision")
-	if err != nil {
-		return
-	}
-	activeRole := map[string]bool{}
-	for _, r := range roles {
-		activeRole[r.ID] = true
-	}
-	lims := core.NewLimits(units)
-	disposed, err := effectpoint.ActiveDispositions(m, ctx, tx)
-	if err != nil {
-		return
-	}
-	bodies := make([]core.GrantBody, len(grants))
-	var bindings []employment.Binding
-	for i, g := range grants {
-		if err = json.Unmarshal(g.Body, &bodies[i]); err != nil {
-			return
-		}
-		if a := bodies[i].Appointment; a != "" {
-			bindings = append(bindings, employment.Binding{Appointment: a, Account: bodies[i].Grantee})
-		}
-	}
-	// a grant bound to an appointment gives access while the employee source proves the appointment active and the
-	// grantee linked to its employee (security 04): ended, planned or unprovable, nothing
-	bound, err := employment.Effective(m, ctx, tx, bindings)
+	f, err := readFacts(m, ctx, tx)
 	if err != nil {
 		return
 	}
 	segsOf := map[string][]any{}
-	for i, g := range grants {
-		b := bodies[i]
-		if b.RoleRevision != "" && !activeRole[b.RoleRevision] {
-			continue // its role revision is no longer effective: nothing (security 08)
-		}
-		if b.Appointment != "" && !bound[employment.Binding{Appointment: b.Appointment, Account: b.Grantee}] {
-			continue
-		}
-		// the effective segments (security 08): the grant's ∩ its governance unit's current limit, of keys registered,
-		// not retired and still defined by their owner
-		for _, s := range lims.OfFor(b.GovernanceUnit, b.Grantee).Cut(b.Segments, b.Grantee) {
-			// a segment that meets a scope an active disposition suspends is left out whole (security 08)
-			if !defs.Usable(s, reg) || effectpoint.Suspended(disposed[b.Grantee], s, b.Grantee) {
-				continue
-			}
-			if err = place(segsOf, b.Grantee, s, g.ID, component, defs); err != nil {
-				return
-			}
-		}
-	}
-	if component == core.ID { // D82: every holder may relinquish its own records; nobody grants it
-		var firstOf map[string]string
-		if firstOf, err = holders(ctx, tx, grants); err != nil {
-			return
-		}
-		self := map[string]sdkauthz.Atom{core.Holder: {Kind: "self"}}
-		for p, src := range firstOf {
-			for _, s := range []sdkauthz.Segment{ // to see one's own records, and relinquish them
-				{ResourceType: core.Records, Operation: core.OpRead, Atoms: self, ReadFields: []string{"body", "id", "record_type", "state"},
-					Valid: sdkauthz.Window{From: relinquishFrom}},
-				{ResourceType: core.Records, Operation: core.OpRelinquish, Atoms: self, Valid: sdkauthz.Window{From: relinquishFrom}},
-			} {
-				if !defs.Usable(s, reg) || effectpoint.Suspended(disposed[p], s, p) {
-					continue
-				}
-				if err = place(segsOf, p, s, src, component, defs); err != nil {
-					return
-				}
-			}
-		}
+	if err = segments(ctx, tx, f, component, defs, "", func(p string, s sdkauthz.Segment, src string) error {
+		return place(segsOf, p, s, src, component, defs)
+	}); err != nil {
+		return
 	}
 	principals := make([]string, 0, len(segsOf))
 	for p := range segsOf {

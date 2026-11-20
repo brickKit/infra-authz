@@ -22,6 +22,7 @@ import (
 	employment "github.com/brickKit/infra-authz/v3/internal/employment"
 	plans "github.com/brickKit/infra-authz/v3/internal/plans"
 	restore "github.com/brickKit/infra-authz/v3/internal/restore"
+	view "github.com/brickKit/infra-authz/v3/internal/view"
 )
 
 // Module is the authorization member: it builds the shared base (core.Base) and registers what each business module
@@ -110,6 +111,8 @@ func (m *Module) Routes(r *httpx.Routes) error {
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/changes/:key", Operation: core.OpRelinquish, Handle: h(effectpoint.ChangeByKey)})
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/relinquishments", Operation: core.OpRelinquish, Handle: h(effectpoint.RelinquishHTTP)})
 	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/records", Operation: core.OpRead, Handle: h(effectpoint.RecordsHTTP)})
+	// the caller's own operation keys, for the frontends' menus (A177; the family's standard read)
+	r.Add(httpx.Route{Method: "GET", Path: "/api/authz/me/operations", Operation: core.OpOwnOperations, Handle: h(view.OwnOperationsHTTP)})
 	// confirmations of every kind of target: admitted like a tightening (a stale source's last view does); the handler
 	// checks the operation the target needs: a saved widening's confirmation is a change, a tightening's a tightening
 	r.Add(httpx.Route{Method: "POST", Path: "/api/authz/confirmations", Operation: core.OpTighten, Handle: h(confirmroutes.ConfirmHTTP)})

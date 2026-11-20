@@ -23,6 +23,7 @@
 | `effective_integration_test.go` | `testEffective`、`testSources` | T4f、T4g：视图给授予的段 ∩ 单元的上限（沿父链到根）；闭包作业对来源收紧的记账；角色修订结束、单元续期、记录自身的有效期、索引说不清的情况 | `core`（`effective.go`）、`effectpoint`（`closure.go`）、`view` |
 | `uncomputable_integration_test.go` | `testUncomputable` | 交集算不出的记录暂停（`uncomputable`），算得出时以派生键恢复 | `effectpoint` |
 | `relinquish_integration_test.go` | `testRelinquish` | D82：放弃本人的授予或持有，只能是自己的，经生效点 | `effectpoint`（`routes.go`） |
+| `own_integration_test.go` | `testOwnOperations` | A177：自己此刻持有的操作键：没有任何授予的得到空集；别的组件的授予、本人的固定段在内，没授的不在；撤销后立即不在 | `view`（`own.go`） |
 | `confirm_integration_test.go` | `testConfirmations`（含 `testProtected`） | T5a：另一位授权管理员按修订确认收紧，只用一次，不成立的确认被拒；T5b–T5d：受保护的放宽等确认，确认后由作业生效或待生效 | `effectpoint`（`confirm.go`）、`confirmroutes` |
 | `identity_integration_test.go` | `identity` | T3：身份成员的账号状态进视图、过时的令牌、来源停住 | `view`、入口的投影 |
 | `tighten_integration_test.go` | `staleTightening`（含 `staleCleanup`） | T5e：来源停住时按最后已应用的事实收紧：`T_tight` 之内一人、之外第二人 | `effectpoint`（`requester.go`） |

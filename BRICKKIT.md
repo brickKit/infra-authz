@@ -109,6 +109,7 @@
 | `POST /api/authz/accounts/{principal}/reconfirm` | `.change`（受保护） | 待补确认的管理员持有资格补上确认：`confirmation`（另一名管理员对 `account` 与 `target_state: active` 的确认）；缺时答 202 `CONFIRMATION_REQUIRED`，成功 204 |
   | `GET /api/authz/changes/{change_key}` | `.change`、`.tighten` 或 `.relinquish` | 按变更键查询结果（键在调用者自己的命名空间里；没有绑定的答 `unbound`） |
   | `POST /api/authz/relinquishments` | `infra.authz.security_record.relinquish` | 放弃自己的一整条授予或管理持有资格（D82）：谁也不用授予，本组件给每个持有者一段固定的段 |
+  | `GET /api/authz/me/operations` | `infra.authz.security_record.own_operations` | 调用者此刻持有的操作键（A177，排好序、各一次）：任何组件的有效段里出现的，与视图同一套算法；只用于显示（前端的菜单），每个操作照样在执行处判定；没有任何授予的调用者得到空集；账号状态此刻证明不了答 `AUTHORIZATION_UNPROVABLE`。谁也不用授予，同样是固定段。授权槽位族的标准读取（`contract-infra-authz`） |
   | `POST /api/authz/dispositions` | `infra.authz.security_disposition.dispose`（只减少访问） | 安全处置：`change_key`、`subject`、`domain`（管理单元，缺省为根）、`suspended_segments` 或 `all_scope: true`（只在根）、受保护时的 `confirmation_ids`；回答同变更结果，`record` 是处置的身份 |
   | `GET /api/authz/dispositions` | `infra.authz.security_disposition.read` | 处置的列表 |
   | `POST /api/authz/dispositions/{id}/release` | `infra.authz.security_disposition.release` | 解除：`change_key`、`disposition_revision`、受保护时的 `confirmation_ids`（确认用 `POST /api/authz/confirmations` 的 `disposition` 与 `expected_revision`，所有者待签内容用 `?disposition=`） |

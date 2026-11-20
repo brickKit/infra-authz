@@ -64,6 +64,7 @@ const registryTSV = "kind\tkey\towner_component\n" +
 	"permission\tinfra.authz.security_disposition.read\tinfra/authz\npermission\tinfra.authz.security_disposition.dispose\tinfra/authz\n" +
 	"permission\tinfra.authz.security_disposition.release\tinfra/authz\n" +
 	"permission\tinfra.authz.security_record.relinquish\tinfra/authz\n" +
+	"permission\tinfra.authz.security_record.own_operations\tinfra/authz\n" +
 	"permission\tinfra.authz.system.read\tinfra/authz\npermission\tinfra.authz.system.verify\tinfra/authz\n" +
 	"permission\tinfra.authz.system.submit\tinfra/authz\n" +
 	"permission\tinfra.authz.system.account_check\tinfra/authz\n" +
@@ -103,6 +104,7 @@ func TestMemberEndToEnd(t *testing.T) {
 	testSources(t, e.w, e.admin, e.root, e.segmentsOf)
 	testUncomputable(t, e.w, e.admin, e.root, e.segmentsOf)
 	testRelinquish(t, e.w, e.admin, e.root)
+	testOwnOperations(t, e.w, e.root)
 	testConfirmations(t, e.w, e.admin, e.root)
 	e.identity()
 	e.staleTightening()
@@ -200,7 +202,7 @@ func startE2E(t *testing.T, employee ...bool) *e2e {
 		"PG_HOST": "localhost", "PG_DATABASE": itDB, "PG_USER": "postgres", "PG_PASSWORD": pgPassword, "PG_SCHEMA": itSchema,
 		"PG_OWNER_USER": "postgres", "PG_OWNER_PASSWORD": pgPassword, "AUTHZ_INSTANCE": "authz-it-instance",
 		"ATTACHMENT_COMPONENT": "infra/attachment",
-		"AUTHZ_REGISTRY": registryTSV, "AUTHZ_INSTALL_CLAIM": "principal:" + sectest.Alice, "BUS_URL": busURL,
+		"AUTHZ_REGISTRY":       registryTSV, "AUTHZ_INSTALL_CLAIM": "principal:" + sectest.Alice, "BUS_URL": busURL,
 		"IAM_GRPC_URL": "http://" + iamSystem, "IAM_COMPONENT": iamID, "AUTHZ_SOURCE_HIGH": "3s", "AUTHZ_SOURCE_READ": "6s",
 		"AUTHZ_T_TIGHT":            itTight.String(),
 		"AUTHZ_PLAN_CONFIRM_ABOVE": strconv.Itoa(itPlanConfirmAbove),

@@ -78,6 +78,7 @@
 | 改变安全记录（授予、撤销、角色、管理单元与持有） | 用户面 | `infra.authz.security_record.change` |
 | 读取安全记录 | 用户面 | `infra.authz.security_record.read` |
 | 放弃自己的授予或管理持有资格（D82） | 用户面 | `infra.authz.security_record.relinquish`（本组件给每个持有者的固定段） |
+| 读自己此刻持有的操作键（A177，前端的菜单） | 用户面 `GET /api/authz/me/operations` | `infra.authz.security_record.own_operations`（同样是本组件给每个持有者的固定段） |
 | 判断一次账号状态变更要不要确认（A134） | 系统面 `AccountService.CheckAccountChange`（只许身份成员） | `infra.authz.system.account_check` |
 | 判断一次账号关联的变更（建立、结束）有没有成立的确认 | 系统面 `AccountService.CheckLinkChange`（只许员工成员） | `infra.authz.system.account_check` |
 | 哪些账号是授权管理员（D62 的提示） | 系统面 `AccountService.Administrators`（只许员工成员） | `infra.authz.system.account_check` |
@@ -96,6 +97,8 @@
 - `mdm/org`（可选）：法人与部门维度，缺时这两个维度不可用；`mdm/employee`（可选，3.0.46 起）：第二个内部来源（水位流 `mdm.employee`，投影 `employees`，配置 `EMPLOYEE_COMPONENT`、`EMPLOYEE_GRPC_URL`），给出账号与员工的关联与任职；缺时每个账号自成一人、没有记录能绑定任职，`CheckLinkChange` 与 `Administrators` 不答任何调用方；`infra/audit`（可选，兼任证据存储）：收紧的意图在本地事务之外写入，缺或不可达时收紧照样生效，完整记录进入外部告警（协议 15）。内部来源按水位探测取得新鲜度（安全 03）。
 
 ## 实现状态
+
+3.0.60：调用者自己的操作键（A177，装配项目阶段计划 C12 的 P2b）：`GET /api/authz/me/operations`，操作 `infra.authz.security_record.own_operations` 像 `.relinquish` 一样是每个持有者的固定段；视图的计算拆成全部署共用的事实（`readFacts`）与按组件、可只算一个主体的有效段（`segments`），视图与这条读取共用它，所以两边的口径不会分开。
 
 3.0.59：be-sdk-go alpha.134（全系统同一个 SDK 版本；SDK 加了组件的公网前缀，用户面路由必须在前缀下，线协议 alpha.131 的 P11.11，装配项目阶段计划 C11）及随之连锁的版本；本组件行为不变。
 
